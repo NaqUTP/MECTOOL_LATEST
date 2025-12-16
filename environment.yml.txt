@@ -1,0 +1,10 @@
+name: mec_tool
+channels:
+  -snowflake
+dependencies:
+  -python=3.10
+  -streamlit=1.46.1
+  -pandas
+  -openpyxl
+  -numpy
+  -pyarrow
