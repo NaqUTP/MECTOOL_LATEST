@@ -1,19 +1,20 @@
 # streamlit_app.py
-# MEC TOOL – Streamlit app (UI polished, performance improved)
+# MEC TOOL – Streamlit app (CSV upload mode; no internal files in repo)
 # Author: Ahmad Naquib Syahmee Masror (Dev/Upstream)
-# Date: 2025-10-29
+# Updated: 2025-12-17
 
 import io
 import os
 import re
 import json
 import warnings
-from typing import Dict, List, Optional
+import hashlib
+from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 import streamlit as st
 
-# Silence harmless openpyxl validation warning
+# Silence harmless openpyxl validation warning (export uses openpyxl)
 warnings.filterwarnings("ignore", category=UserWarning, module="openpyxl")
 
 # AG Grid (with JsCode for custom JS)
@@ -62,7 +63,6 @@ BRAND1, BRAND2, MUTED = PALETTE["brand1"], PALETTE["brand2"], PALETTE["muted"]
 
 
 def apply_theme(dark: bool, brand1: str, brand2: str, muted: str) -> None:
-    # Light/dark surface & text harmonization
     surface = "#0B0F14" if dark else "#FFFFFF"
     surface_alt = "#111827" if dark else "#F9FAFB"
     text = "#E5E7EB" if dark else "#111827"
@@ -80,16 +80,12 @@ def apply_theme(dark: bool, brand1: str, brand2: str, muted: str) -> None:
         --text: {text};
         --text-muted: {text_muted};
       }}
-      /* App background + text */
       .stApp {{ background: var(--surface); color: var(--text); }}
-      /* Headings */
       .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {{ color: var(--text); }}
-      /* Small captions & labels */
       .stCaption, p, label, .st-emotion-cache-16idsys span {{ color: var(--text-muted); }}
-      /* Metric titles & values */
       div[data-testid="metric-container"] label p {{ color: var(--text-muted) !important; }}
       div[data-testid="metric-container"] div {{ color: var(--text) !important; }}
-      /* Buttons – accent hover */
+
       .stButton button {{
         border: 1px solid var(--brand1);
         color: #fff; background: var(--brand1);
@@ -97,7 +93,6 @@ def apply_theme(dark: bool, brand1: str, brand2: str, muted: str) -> None:
       .stButton button:hover {{
         filter: brightness(0.95); box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand1) 30%, transparent);
       }}
-      /* Panels/tables */
       .stDataFrame, .st-emotion-cache-oco5fk, .st-emotion-cache-1k2qj1w {{
         background: var(--surface-alt);
       }}
@@ -241,7 +236,7 @@ _num = re.compile(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?")  # robust number finder
 
 
 def _to_float_safe(val: object) -> float:
-    s = str(val or "").replace(",", "")  # remove thousand separators
+    s = str(val or "").replace(",", "")
     s = s.replace(NBSP, " ").strip()
     s = re.sub(r"(usd|myr|rm|\$)", " ", s, flags=re.I)
     m = _num.search(s)
@@ -286,39 +281,11 @@ def _normalize_cols(df: pd.DataFrame) -> pd.DataFrame:
         elif "type of unit rate" in cl or cl in ("type", "rate type", "unit type"):
             colmap[c] = "type of unit rate"
         elif ("unit rate" in cl and ("myr" in cl or "usd" in cl or cl == "unit rate")) or ("normalise rate" in cl):
+            # keep original name for rate columns
             colmap[c] = c
         else:
             colmap[c] = c
     return df.rename(columns=colmap)
-
-
-def _find_header_row(raw: pd.DataFrame, max_scan: int = 80) -> Optional[int]:
-    for r in range(min(max_scan, len(raw))):
-        row = [_canon(v) for v in list(raw.iloc[r, :].values)]
-        hits = 0
-        for key in ["discipline", "personnel", "category", "schedule", "type of unit", "unit rate", "unit rate (myr)"]:
-            if any(key in v for v in row):
-                hits += 1
-        if hits >= 3:
-            return r
-    return None
-
-
-def _read_sheet_smart(xl: pd.ExcelFile, sheet_names: List[str]) -> pd.DataFrame:
-    for name in sheet_names:
-        try:
-            raw = xl.parse(name, header=None)
-        except Exception:
-            continue
-        hdr = _find_header_row(raw)
-        if hdr is None:
-            continue
-        df = raw.iloc[hdr + 1 :].copy()
-        df.columns = [raw.iloc[hdr, i] if i < raw.shape[1] else f"col_{i}" for i in range(df.shape[1])]
-        df = df.loc[:, ~pd.Index(df.columns.astype(str)).str.contains("^Unnamed", case=False, na=False)]
-        df = _normalize_cols(df).dropna(how="all")
-        return df
-    return pd.DataFrame()
 
 
 def get_col(df: pd.DataFrame, name: str) -> pd.Series:
@@ -329,7 +296,6 @@ def get_col(df: pd.DataFrame, name: str) -> pd.Series:
 
 
 def canon_series(s):
-    # accepts Series or DataFrame
     if isinstance(s, pd.DataFrame):
         s = s.bfill(axis=1).iloc[:, 0]
     return s.astype(str).str.replace(NBSP, " ").str.strip().str.lower()
@@ -351,14 +317,7 @@ def build_category_options(schedule: str, rate_source: str, data_tbl, u1_tbl, u2
             tag = _canon_sched_tag(schedule)
             df = df[canon_series(get_col(df, "schedule")).apply(_canon_sched_tag) == tag]
         if "category" in df.columns:
-            cats = (
-                get_col(df, "category")
-                .dropna()
-                .astype(str)
-                .str.strip()
-                .unique()
-                .tolist()
-            )
+            cats = get_col(df, "category").dropna().astype(str).str.strip().unique().tolist()
             cats = [c for c in cats if c]
             if cats:
                 return sorted(cats)
@@ -407,57 +366,83 @@ def _rate_col_for_unit_type(df: pd.DataFrame, unit_type: str, prefer_usd: bool) 
     return None
 
 
-def _base_working_rate_col(working: pd.DataFrame) -> Optional[str]:
-    for c in working.columns:
-        k = _canon(c)
-        if "unit rate" in k and ("myr" in k or "usd" in k or k == "unit rate" or "normalise rate" in k):
-            return c
-    return None
-
-
 # ──────────────────────────────────────────────────────────────────────────────
-# Load workbook (bytes)
+# CSV Upload Mode (3 separate uploads) — NOTHING stored in repo
 # ──────────────────────────────────────────────────────────────────────────────
-@st.cache_data(show_spinner=False, ttl=600)  # cache for 10 minutes
-def load_workbook(file_bytes: bytes, file_label: str):
-    bio = io.BytesIO(file_bytes)
-    xl = pd.ExcelFile(bio, engine="openpyxl")
+def _hash_bytes(b: bytes) -> str:
+    return hashlib.sha256(b).hexdigest()
 
-    working = _read_sheet_smart(xl, ["Working Page", "TblWorkingView"])
-    data_tbl = _read_sheet_smart(xl, ["Data"])
-    u1_tbl = _read_sheet_smart(xl, ["U1"])
-    u2_tbl = _read_sheet_smart(xl, ["U2"])
 
-    base_rate_col = _base_working_rate_col(working)
+@st.cache_data(show_spinner=False, ttl=600)
+def _read_csv_bytes(file_bytes: bytes) -> pd.DataFrame:
+    return pd.read_csv(io.BytesIO(file_bytes))
 
-    schedule_opts = []
-    if not data_tbl.empty and "schedule" in data_tbl.columns:
-        s = get_col(data_tbl, "schedule").dropna().astype(str).str.strip()
-        schedule_opts = sorted([v for v in s.unique().tolist() if v])
 
-    package_opts = [s for s, df in (("U1", u1_tbl), ("U2", u2_tbl)) if not df.empty] or ["U1", "U2"]
+def _load_tables_from_uploads(data_bytes: bytes, u1_bytes: bytes, u2_bytes: bytes) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    data_tbl = _normalize_cols(_read_csv_bytes(data_bytes))
+    u1_tbl = _normalize_cols(_read_csv_bytes(u1_bytes))
+    u2_tbl = _normalize_cols(_read_csv_bytes(u2_bytes))
+    return data_tbl, u1_tbl, u2_tbl
 
-    disciplines = list(DISCIPLINE_ROW_COUNTS.keys())
 
-    personnel_union = []
-    for _, plist in DEFAULT_PERSONNEL.items():
-        personnel_union.extend(plist)
-    if not working.empty and "personnel" in working.columns:
-        personnel_union.extend(get_col(working, "personnel").dropna().astype(str).tolist())
-    personnel_union = sorted(pd.Series(personnel_union).dropna().astype(str).drop_duplicates().tolist())
+with st.sidebar:
+    st.subheader("Rate Tables (CSV uploads)")
+    st.caption("Upload all 3 CSV files. Nothing is stored in the repo.")
+    up_data = st.file_uploader("Data.csv", type=["csv"], key="up_data")
+    up_u1 = st.file_uploader("U1.csv", type=["csv"], key="up_u1")
+    up_u2 = st.file_uploader("U2.csv", type=["csv"], key="up_u2")
 
-    return (
-        working,
-        data_tbl,
-        u1_tbl,
-        u2_tbl,
-        base_rate_col,
-        schedule_opts,
-        package_opts,
-        disciplines,
-        personnel_union,
-    )
+    if st.button("Reset app session", use_container_width=True):
+        # Clear everything (safe reset)
+        for k in list(st.session_state.keys()):
+            del st.session_state[k]
+        do_rerun()
 
+if not (up_data and up_u1 and up_u2):
+    st.title("MEC TOOL")
+    st.info("Please upload **Data.csv**, **U1.csv**, and **U2.csv** using the sidebar to start.")
+    st.stop()
+
+# Read bytes once (streamlit UploadedFile is file-like; .getvalue() gives stable bytes)
+data_bytes = up_data.getvalue()
+u1_bytes = up_u1.getvalue()
+u2_bytes = up_u2.getvalue()
+
+upload_fingerprint = _hash_bytes(data_bytes)[:10] + _hash_bytes(u1_bytes)[:10] + _hash_bytes(u2_bytes)[:10]
+prev_fp = st.session_state.get("_upload_fp")
+
+if prev_fp and prev_fp != upload_fingerprint:
+    # Uploaded new tables → reset grid to avoid mixing old selections
+    st.session_state.pop(GRID_KEY, None)
+    st.session_state.pop("_last_df_out", None)
+    st.session_state.pop("_last_totals", None)
+
+st.session_state["_upload_fp"] = upload_fingerprint
+
+try:
+    data_tbl, u1_tbl, u2_tbl = _load_tables_from_uploads(data_bytes, u1_bytes, u2_bytes)
+except Exception as e:
+    st.error("Failed to read one of the CSV files. Please confirm they are valid CSV exports.")
+    st.exception(e)
+    st.stop()
+
+# “Working Page” is not used in CSV upload mode
+working = pd.DataFrame()
+base_rate_col = None
+
+# Options
+schedule_opts = []
+if not data_tbl.empty and "schedule" in data_tbl.columns:
+    s = get_col(data_tbl, "schedule").dropna().astype(str).str.strip()
+    schedule_opts = sorted([v for v in s.unique().tolist() if v])
+
+package_opts = [s for s, df in (("U1", u1_tbl), ("U2", u2_tbl)) if not df.empty] or ["U1", "U2"]
+DISC_LIST = list(DISCIPLINE_ROW_COUNTS.keys())
+
+personnel_union = []
+for _, plist in DEFAULT_PERSONNEL.items():
+    personnel_union.extend(plist)
+PERSONNEL_LIST = sorted(pd.Series(personnel_union).dropna().astype(str).drop_duplicates().tolist())
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Rate lookup (relaxed matching)
@@ -519,98 +504,9 @@ def get_rate(
             if not m.empty:
                 return _to_float_safe(get_col(m, col).iloc[0])
 
-    if not working.empty:
-        for c in working.columns:
-            k = _canon(c)
-            if "unit rate" in k and (rate_source.strip().lower() in k):
-                m = _relaxed_match(working, discipline, personnel, category, schedule)
-                if not m.empty:
-                    return _to_float_safe(get_col(m, c).iloc[0])
-
-    if base_rate_col and base_rate_col in working.columns:
-        m = _relaxed_match(working, discipline, personnel, category, schedule)
-        if not m.empty:
-            return _to_float_safe(get_col(m, base_rate_col).iloc[0])
-
+    # CSV mode: no “working” fallback
     return 0.0
 
-
-# ──────────────────────────────────────────────────────────────────────────────
-# HARD NO-UPLOAD MODE — load from local folder
-# ──────────────────────────────────────────────────────────────────────────────
-DEFAULT_HOST_DIR = r"C:\mec_inputs" if os.name == "nt" else os.path.join(os.getcwd(), "input")
-SAFE_BASE_DIR = os.environ.get("MEC_ALLOWED_DIR", DEFAULT_HOST_DIR)
-DEFAULT_FILE_ENV = os.environ.get("MEC_DEFAULT_FILE", "MEC TOOL.xlsx").strip()
-os.makedirs(SAFE_BASE_DIR, exist_ok=True)
-
-
-def _list_xlsx(base):
-    try:
-        return sorted(
-            [f for f in os.listdir(base) if f.lower().endswith(".xlsx")],
-            key=lambda n: os.path.getmtime(os.path.join(base, n)),
-            reverse=True,
-        )
-    except Exception:
-        return []
-
-
-def _resolve_file():
-    if DEFAULT_FILE_ENV and os.path.isabs(DEFAULT_FILE_ENV) and os.path.exists(DEFAULT_FILE_ENV):
-        return DEFAULT_FILE_ENV
-    if DEFAULT_FILE_ENV:
-        candidate = os.path.join(SAFE_BASE_DIR, DEFAULT_FILE_ENV)
-        if os.path.exists(candidate):
-            return candidate
-    file_list = _list_xlsx(SAFE_BASE_DIR)
-    if file_list:
-        return os.path.join(SAFE_BASE_DIR, file_list[0])
-    raise FileNotFoundError(
-        f"No .xlsx found. Put a workbook named '{DEFAULT_FILE_ENV}' into:\n {SAFE_BASE_DIR}"
-    )
-
-
-with st.sidebar:
-    st.subheader("Workbook (local, no-upload)")
-    st.caption(f"Folder: {SAFE_BASE_DIR}")
-    if st.button("Reload file", use_container_width=True):
-        st.session_state.pop("file_bytes", None)
-        st.session_state.pop("file_label", None)
-        do_rerun()
-    st.markdown(
-        """
-Drop your MEC workbook in the folder above, then click Reload.
-""",
-        unsafe_allow_html=True,
-    )
-
-file_bytes = st.session_state.get("file_bytes")
-file_label = st.session_state.get("file_label")
-if not file_bytes:
-    try:
-        path = _resolve_file()
-        with open(path, "rb") as f:
-            file_bytes = f.read()
-        file_label = os.path.basename(path)
-        st.session_state["file_bytes"] = file_bytes
-        st.session_state["file_label"] = file_label
-        st.success(f"Loaded: {file_label}")
-    except Exception as e:
-        st.error(str(e))
-        st.stop()
-
-# Parse workbook from bytes
-(
-    working,
-    data_tbl,
-    u1_tbl,
-    u2_tbl,
-    base_rate_col,
-    schedule_opts,
-    package_opts,
-    DISC_LIST,
-    PERSONNEL_LIST,
-) = load_workbook(file_bytes, file_label)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Session defaults
@@ -697,7 +593,6 @@ def compute_line_items(grid_df: pd.DataFrame, currency: str, rate_source: str, t
         return val
 
     df = grid_df.copy()
-    # downcast types to reduce payload
     for col in ["Weightage (FTE)", "Duration (months)"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").astype("float32")
@@ -802,21 +697,31 @@ def to_excel_bytes(main_meta: pd.DataFrame, totals: pd.DataFrame, lines: pd.Data
         ws[f"C{r}"].value = lbl
         ws[f"E{r}"].value = val
         ws[f"C{r}"].font = Font(bold=True)
-        paint_range(ws, f"E{r}:I{r}", fill=PatternFill("solid", fgColor=LIGHT), border=Border(left=THIN, right=THIN, top=THIN, bottom=THIN))
+        paint_range(
+            ws,
+            f"E{r}:I{r}",
+            fill=PatternFill("solid", fgColor=LIGHT),
+            border=Border(left=THIN, right=THIN, top=THIN, bottom=THIN),
+        )
 
     notes = r0 + len(fields) + 3
     ws[f"C{notes}"].value = "Notes:"
     ws[f"C{notes}"].font = Font(bold=True)
     ws[f"C{notes+2}"].value = "Type of Package"
-    ws[f"C{notes+3}"].value = "Package U1"; ws[f"E{notes+3}"].value = "Feasibility Study & Conceptual Engineering for Upstream"
-    ws[f"C{notes+4}"].value = "Package U2"; ws[f"E{notes+4}"].value = "FEED & Detailed Design for Upstream"
-    ws[f"C{notes+6}"].value = "Type of Schedule"; ws[f"F{notes+6}"].value = "Currency"
-    for i, (tag, desc, cur) in enumerate([
-        ("Schedule A", "Malaysia Project (Malaysia Base)", "MYR"),
-        ("Schedule B", "Malaysia Project (International Base)", "USD"),
-        ("Schedule C", "International Project (Malaysia Base)", "MYR"),
-        ("Schedule D", "International Project (International Base)", "USD"),
-    ]):
+    ws[f"C{notes+3}"].value = "Package U1"
+    ws[f"E{notes+3}"].value = "Feasibility Study & Conceptual Engineering for Upstream"
+    ws[f"C{notes+4}"].value = "Package U2"
+    ws[f"E{notes+4}"].value = "FEED & Detailed Design for Upstream"
+    ws[f"C{notes+6}"].value = "Type of Schedule"
+    ws[f"F{notes+6}"].value = "Currency"
+    for i, (tag, desc, cur) in enumerate(
+        [
+            ("Schedule A", "Malaysia Project (Malaysia Base)", "MYR"),
+            ("Schedule B", "Malaysia Project (International Base)", "USD"),
+            ("Schedule C", "International Project (Malaysia Base)", "MYR"),
+            ("Schedule D", "International Project (International Base)", "USD"),
+        ]
+    ):
         rr = notes + 7 + i
         ws[f"C{rr}"].value = tag
         ws[f"D{rr}"].value = desc
@@ -825,7 +730,7 @@ def to_excel_bytes(main_meta: pd.DataFrame, totals: pd.DataFrame, lines: pd.Data
     set_col_w(ws, {"B": 2, "C": 22, "D": 40, "E": 36, "F": 12, "G": 10, "H": 10, "I": 6})
     ws.freeze_panes = "B6"
 
-    # Working Page
+    # Working Page (export)
     ws2 = wb.create_sheet("Working Page")
     unit_rate_col = next((c for c in lines.columns if c.startswith("Unit Rate (")), f"Unit Rate ({currency})")
     total_cost_col = next((c for c in lines.columns if c.startswith("Total Cost (")), f"Total Cost ({currency})")
@@ -866,11 +771,11 @@ def to_excel_bytes(main_meta: pd.DataFrame, totals: pd.DataFrame, lines: pd.Data
         c.alignment = Alignment(horizontal="center")
         c.border = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 
-    def set_col_w(ws, widths):
+    def set_col_w2(ws, widths):
         for col, w in widths.items():
             ws.column_dimensions[col].width = w
 
-    set_col_w(ws2, {"B": 16, "C": 30, "D": 18, "E": 18, "F": 14, "U": 22})
+    set_col_w2(ws2, {"B": 16, "C": 30, "D": 18, "E": 18, "F": 14, "U": 22})
     ws2.freeze_panes = "B6"
 
     cur_r = start_row + 1
@@ -1029,13 +934,8 @@ def reset_grid():
 # ──────────────────────────────────────────────────────────────────────────────
 def render_main():
     stepper("MAIN")
-    st.markdown(
-        """
-# MEC TOOL
-""",
-        unsafe_allow_html=True,
-    )
-    st.caption(f"Workbook: {st.session_state.get('file_label','(loaded)')}")
+    st.markdown("# MEC TOOL", unsafe_allow_html=True)
+    st.caption("Input mode: CSV uploads (Data.csv, U1.csv, U2.csv)")
 
     st.markdown("<hr/>", unsafe_allow_html=True)
     st.header("Main Page")
@@ -1067,7 +967,7 @@ def render_main():
             ),
         )
         st.session_state["type_of_schedule"] = st.selectbox(
-            "Type of Schedule (from Data sheet)",
+            "Type of Schedule (from Data.csv)",
             schedule_opts if schedule_opts else ["Schedule A", "Schedule B", "Schedule C", "Schedule D"],
             index=0
             if not schedule_opts
@@ -1178,7 +1078,6 @@ def render_table():
     # ── AG Grid ────────────────────────────────────────────────────────────────
     df = st.session_state[GRID_KEY].copy()
 
-    # Downcast types: categorical reduces JSON payload
     categoricals = ["Discipline", "Personnel", "Category", "Type of Unit Rate"]
     for col in categoricals:
         if col in df.columns:
@@ -1187,7 +1086,6 @@ def render_table():
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").astype("float32")
 
-    # Dynamic grid height
     row_height, header_height = 34, 36
     grid_height = min(700, max(260, int(len(df) * row_height + header_height + 16)))
 
@@ -1228,7 +1126,6 @@ def render_table():
     gb.configure_column("Weightage (FTE)", type=["numericColumn"], width=170, editable=True)
     gb.configure_column("Duration (months)", type=["numericColumn"], width=170, editable=True)
 
-    # Row tint by discipline
     disc_bg = {k: f"#{v}" for k, v in DISCIPLINE_COLORS.items()}
     row_style_js = JsCode(
         """
@@ -1238,7 +1135,8 @@ function(params) {
   const bg = map[disc] || null;
   return bg ? { backgroundColor: bg } : null;
 }
-""" % json.dumps(disc_bg)
+"""
+        % json.dumps(disc_bg)
     )
     gb.configure_grid_options(getRowStyle=row_style_js)
     grid_opts = gb.build()
@@ -1251,29 +1149,22 @@ function(params) {
         theme="streamlit",
     )
 
-    # Debounce computations for performance
     st.markdown(" ")
     col_db1, col_db2 = st.columns([1, 1])
     with col_db1:
-        auto_recalc = st.toggle(
-            "Auto‑recalculate totals",
-            value=True,
-            help="Turn off for faster editing on large tables.",
-        )
+        auto_recalc = st.toggle("Auto-recalculate totals", value=True, help="Turn off for faster editing on large tables.")
     with col_db2:
         recalc_clicked = st.button("Recalculate now", use_container_width=True)
     should_recalc = auto_recalc or recalc_clicked
 
     try:
-        grid_resp = AgGrid(df, update_on="value_changed", **aggrid_common)  # new API
+        grid_resp = AgGrid(df, update_on="value_changed", **aggrid_common)
     except TypeError:
-        # Fallback to old API name
         grid_resp = AgGrid(df, update_mode=GridUpdateMode.VALUE_CHANGED, **aggrid_common)
 
     df_current = pd.DataFrame(grid_resp["data"])
     st.session_state[GRID_KEY] = df_current
 
-    # Results at bottom
     if should_recalc:
         df_out = compute_line_items(st.session_state[GRID_KEY], currency, rate_source, type_of_schedule)
         total_manhour, avg_rate, total_by_average, total_exact, totals = compute_totals(df_out, currency)
@@ -1377,22 +1268,17 @@ def render_summary():
     st.subheader("Main Page (entered)")
     st.dataframe(main_meta, use_container_width=True)
 
-    # =========================
-    # Visuals (colored)
-    # =========================
+    # Visuals
     if not df_out.empty:
-        # Build color map for disciplines from XLSX tint palette
         discipline_color_map = {d: f"#{DISCIPLINE_COLORS.get(d, 'D1D5DB')}" for d in df_out["Discipline"].unique()}
 
         st.subheader("Visual Summary")
 
-        # Chart 1: Total Price by Discipline (Bar)
         totals_disp = (
             df_out.groupby("Discipline", as_index=False)[f"Total Cost ({currency})"]
             .sum()
             .sort_values(by=f"Total Cost ({currency})", ascending=False)
         )
-        # Round to reduce payload
         totals_disp[f"Total Cost ({currency})"] = totals_disp[f"Total Cost ({currency})"].round(2)
 
         fig_bar = px.bar(
@@ -1414,7 +1300,6 @@ def render_summary():
         )
         st.plotly_chart(fig_bar, use_container_width=True)
 
-        # Chart 2: Cost Share by Category (Donut)
         cat_disp = (
             df_out.groupby("Category", as_index=False)[f"Total Cost ({currency})"]
             .sum()
@@ -1431,7 +1316,11 @@ def render_summary():
                 color_discrete_sequence=brand_seq,
                 title=f"Cost Share by Category ({currency})",
             )
-            fig_donut.update_traces(textposition="inside", textinfo="percent+label", hovertemplate="%{label}<br>%{value:,.2f}")
+            fig_donut.update_traces(
+                textposition="inside",
+                textinfo="percent+label",
+                hovertemplate="%{label}<br>%{value:,.2f}",
+            )
             fig_donut.update_layout(
                 title_x=0.0,
                 showlegend=True,
@@ -1444,25 +1333,16 @@ def render_summary():
 
         st.caption("Tips: Use the Personnel Table to adjust Weightage/Duration and see instant visual updates here.")
 
-    # Download
+    # Download output Excel
     excel_blob = to_excel_bytes(main_meta, totals, df_out, schedule_label=type_of_schedule, currency=currency)
-    try:
-        st.download_button(
-            "⬇️ Download Summary (Excel)",
-            data=excel_blob,
-            file_name="MEC_TOOL_Output.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary",
-            help="Main Page, Working Page (tinted & subtotals), and Summary — styled & currency-aware",
-        )
-    except TypeError:
-        st.download_button(
-            "⬇️ Download Summary (Excel)",
-            data=excel_blob,
-            file_name="MEC_TOOL_Output.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            help="Main Page, Working Page (tinted & subtotals), and Summary — styled & currency-aware",
-        )
+    st.download_button(
+        "⬇️ Download Summary (Excel)",
+        data=excel_blob,
+        file_name="MEC_TOOL_Output.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        type="primary",
+        help="Main Page, Working Page (tinted & subtotals), and Summary — styled & currency-aware",
+    )
 
     c1, c2 = st.columns([1, 1])
     with c1:
