@@ -1,22 +1,19 @@
 # streamlit_app.py
-# MEC TOOL – Streamlit app (Excel upload mode; no internal files in repo)
+# MEC TOOL – Streamlit app (UI polished, performance improved)
 # Author: Ahmad Naquib Syahmee Masror (Dev/Upstream)
-# Updated: 2025-12-17
-# ADDED: Project Comparison Feature
-# MODIFIED: Single Excel file input (MEC TOOL.xlsx)
+# Date: 2025-10-29
 
 import io
+import os
 import re
 import json
 import warnings
-import hashlib
-from typing import Dict, List, Optional, Tuple, Any
-from datetime import datetime
+from typing import Dict, List, Optional
 
 import pandas as pd
 import streamlit as st
 
-# Silence harmless openpyxl validation warning (export uses openpyxl)
+# Silence harmless openpyxl validation warning
 warnings.filterwarnings("ignore", category=UserWarning, module="openpyxl")
 
 # AG Grid (with JsCode for custom JS)
@@ -33,8 +30,6 @@ except Exception:
 # Plotly for visuals
 try:
     import plotly.express as px
-    import plotly.graph_objects as go
-    from plotly.subplots import make_subplots
 except Exception:
     st.error(
         "Missing dependency plotly.\n\n"
@@ -67,6 +62,7 @@ BRAND1, BRAND2, MUTED = PALETTE["brand1"], PALETTE["brand2"], PALETTE["muted"]
 
 
 def apply_theme(dark: bool, brand1: str, brand2: str, muted: str) -> None:
+    # Light/dark surface & text harmonization
     surface = "#0B0F14" if dark else "#FFFFFF"
     surface_alt = "#111827" if dark else "#F9FAFB"
     text = "#E5E7EB" if dark else "#111827"
@@ -84,12 +80,16 @@ def apply_theme(dark: bool, brand1: str, brand2: str, muted: str) -> None:
         --text: {text};
         --text-muted: {text_muted};
       }}
+      /* App background + text */
       .stApp {{ background: var(--surface); color: var(--text); }}
+      /* Headings */
       .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {{ color: var(--text); }}
+      /* Small captions & labels */
       .stCaption, p, label, .st-emotion-cache-16idsys span {{ color: var(--text-muted); }}
+      /* Metric titles & values */
       div[data-testid="metric-container"] label p {{ color: var(--text-muted) !important; }}
       div[data-testid="metric-container"] div {{ color: var(--text) !important; }}
-
+      /* Buttons – accent hover */
       .stButton button {{
         border: 1px solid var(--brand1);
         color: #fff; background: var(--brand1);
@@ -97,21 +97,9 @@ def apply_theme(dark: bool, brand1: str, brand2: str, muted: str) -> None:
       .stButton button:hover {{
         filter: brightness(0.95); box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand1) 30%, transparent);
       }}
+      /* Panels/tables */
       .stDataFrame, .st-emotion-cache-oco5fk, .st-emotion-cache-1k2qj1w {{
         background: var(--surface-alt);
-      }}
-      .project-card {{
-        background: var(--surface-alt);
-        border-radius: 10px;
-        padding: 15px;
-        margin-bottom: 10px;
-        border-left: 4px solid var(--brand1);
-      }}
-      .comparison-metric {{
-        background: var(--surface);
-        border-radius: 8px;
-        padding: 10px;
-        text-align: center;
       }}
     </style>
     """,
@@ -244,121 +232,6 @@ DISCIPLINE_SWATCH = {
 }
 
 GRID_KEY = "grid_df"
-PROJECTS_KEY = "saved_projects"
-COMPARE_KEY = "compare_selection"
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Project Management Functions
-# ──────────────────────────────────────────────────────────────────────────────
-def save_current_project(project_name: str = None) -> str:
-    """Save current project state to session state"""
-    if PROJECTS_KEY not in st.session_state:
-        st.session_state[PROJECTS_KEY] = {}
-    
-    if not project_name:
-        project_name = st.session_state.get("project_title", f"Project_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
-    
-    # Create project snapshot
-    project_data = {
-        "id": hashlib.md5(f"{project_name}_{datetime.now().timestamp()}".encode()).hexdigest()[:8],
-        "name": project_name,
-        "timestamp": datetime.now().isoformat(),
-        "metadata": {
-            "project_title": st.session_state.get("project_title", ""),
-            "cost_engineer": st.session_state.get("cost_engineer", ""),
-            "tp_specialist": st.session_state.get("tp_specialist", ""),
-            "project_date": str(st.session_state.get("project_date", "")),
-            "type_of_package": st.session_state.get("type_of_package", ""),
-            "type_of_schedule": st.session_state.get("type_of_schedule", ""),
-            "rate_source": st.session_state.get("rate_source", ""),
-        },
-        "grid_data": st.session_state.get(GRID_KEY, pd.DataFrame()).to_dict(orient="records"),
-        "totals": None,
-        "line_items": None,
-        "currency": None,
-        "total_manhour": 0,
-        "avg_rate": 0,
-        "total_exact": 0,
-    }
-    
-    # Calculate current totals if possible
-    try:
-        currency = currency_for(project_data["metadata"]["type_of_schedule"])
-        df_out = compute_line_items(
-            pd.DataFrame(project_data["grid_data"]),
-            currency,
-            project_data["metadata"]["rate_source"],
-            project_data["metadata"]["type_of_schedule"]
-        )
-        total_manhour, avg_rate, total_by_average, total_exact, totals = compute_totals(df_out, currency)
-        
-        project_data.update({
-            "totals": totals.to_dict(orient="records") if not totals.empty else [],
-            "line_items": df_out.to_dict(orient="records") if not df_out.empty else [],
-            "currency": currency,
-            "total_manhour": float(total_manhour),
-            "avg_rate": float(avg_rate),
-            "total_by_average": float(total_by_average),
-            "total_exact": float(total_exact),
-        })
-    except Exception as e:
-        st.warning(f"Could not calculate totals for saving: {e}")
-    
-    # Save to session state
-    st.session_state[PROJECTS_KEY][project_data["id"]] = project_data
-    return project_data["id"]
-
-
-def load_project(project_id: str) -> bool:
-    """Load a saved project into current session"""
-    if PROJECTS_KEY not in st.session_state or project_id not in st.session_state[PROJECTS_KEY]:
-        return False
-    
-    project = st.session_state[PROJECTS_KEY][project_id]
-    
-    # Load metadata
-    for key, value in project["metadata"].items():
-        if key in st.session_state:
-            st.session_state[key] = value
-    
-    # Load grid data
-    if project["grid_data"]:
-        st.session_state[GRID_KEY] = pd.DataFrame(project["grid_data"])
-    
-    return True
-
-
-def delete_project(project_id: str):
-    """Delete a saved project"""
-    if PROJECTS_KEY in st.session_state and project_id in st.session_state[PROJECTS_KEY]:
-        del st.session_state[PROJECTS_KEY][project_id]
-        # Also remove from compare selection
-        if COMPARE_KEY in st.session_state and project_id in st.session_state[COMPARE_KEY]:
-            st.session_state[COMPARE_KEY].remove(project_id)
-
-
-def get_project_summary_df() -> pd.DataFrame:
-    """Get dataframe of all saved projects for display"""
-    if PROJECTS_KEY not in st.session_state or not st.session_state[PROJECTS_KEY]:
-        return pd.DataFrame()
-    
-    rows = []
-    for project_id, project in st.session_state[PROJECTS_KEY].items():
-        rows.append({
-            "ID": project_id,
-            "Project Name": project["name"],
-            "Date": project["metadata"]["project_date"],
-            "Schedule": project["metadata"]["type_of_schedule"],
-            "Package": project["metadata"]["type_of_package"],
-            "Currency": project.get("currency", ""),
-            "Total Manhour": project.get("total_manhour", 0),
-            "Avg Rate": project.get("avg_rate", 0),
-            "Total Cost": project.get("total_exact", 0),
-            "Saved": project["timestamp"][:10],
-        })
-    
-    return pd.DataFrame(rows)
-
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Helpers (robust parsing + matching)
@@ -368,7 +241,7 @@ _num = re.compile(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?")  # robust number finder
 
 
 def _to_float_safe(val: object) -> float:
-    s = str(val or "").replace(",", "")
+    s = str(val or "").replace(",", "")  # remove thousand separators
     s = s.replace(NBSP, " ").strip()
     s = re.sub(r"(usd|myr|rm|\$)", " ", s, flags=re.I)
     m = _num.search(s)
@@ -413,11 +286,39 @@ def _normalize_cols(df: pd.DataFrame) -> pd.DataFrame:
         elif "type of unit rate" in cl or cl in ("type", "rate type", "unit type"):
             colmap[c] = "type of unit rate"
         elif ("unit rate" in cl and ("myr" in cl or "usd" in cl or cl == "unit rate")) or ("normalise rate" in cl):
-            # keep original name for rate columns
             colmap[c] = c
         else:
             colmap[c] = c
     return df.rename(columns=colmap)
+
+
+def _find_header_row(raw: pd.DataFrame, max_scan: int = 80) -> Optional[int]:
+    for r in range(min(max_scan, len(raw))):
+        row = [_canon(v) for v in list(raw.iloc[r, :].values)]
+        hits = 0
+        for key in ["discipline", "personnel", "category", "schedule", "type of unit", "unit rate", "unit rate (myr)"]:
+            if any(key in v for v in row):
+                hits += 1
+        if hits >= 3:
+            return r
+    return None
+
+
+def _read_sheet_smart(xl: pd.ExcelFile, sheet_names: List[str]) -> pd.DataFrame:
+    for name in sheet_names:
+        try:
+            raw = xl.parse(name, header=None)
+        except Exception:
+            continue
+        hdr = _find_header_row(raw)
+        if hdr is None:
+            continue
+        df = raw.iloc[hdr + 1 :].copy()
+        df.columns = [raw.iloc[hdr, i] if i < raw.shape[1] else f"col_{i}" for i in range(df.shape[1])]
+        df = df.loc[:, ~pd.Index(df.columns.astype(str)).str.contains("^Unnamed", case=False, na=False)]
+        df = _normalize_cols(df).dropna(how="all")
+        return df
+    return pd.DataFrame()
 
 
 def get_col(df: pd.DataFrame, name: str) -> pd.Series:
@@ -428,6 +329,7 @@ def get_col(df: pd.DataFrame, name: str) -> pd.Series:
 
 
 def canon_series(s):
+    # accepts Series or DataFrame
     if isinstance(s, pd.DataFrame):
         s = s.bfill(axis=1).iloc[:, 0]
     return s.astype(str).str.replace(NBSP, " ").str.strip().str.lower()
@@ -449,7 +351,14 @@ def build_category_options(schedule: str, rate_source: str, data_tbl, u1_tbl, u2
             tag = _canon_sched_tag(schedule)
             df = df[canon_series(get_col(df, "schedule")).apply(_canon_sched_tag) == tag]
         if "category" in df.columns:
-            cats = get_col(df, "category").dropna().astype(str).str.strip().unique().tolist()
+            cats = (
+                get_col(df, "category")
+                .dropna()
+                .astype(str)
+                .str.strip()
+                .unique()
+                .tolist()
+            )
             cats = [c for c in cats if c]
             if cats:
                 return sorted(cats)
@@ -498,147 +407,57 @@ def _rate_col_for_unit_type(df: pd.DataFrame, unit_type: str, prefer_usd: bool) 
     return None
 
 
+def _base_working_rate_col(working: pd.DataFrame) -> Optional[str]:
+    for c in working.columns:
+        k = _canon(c)
+        if "unit rate" in k and ("myr" in k or "usd" in k or k == "unit rate" or "normalise rate" in k):
+            return c
+    return None
+
+
 # ──────────────────────────────────────────────────────────────────────────────
-# Excel Upload Mode (single file with 3 sheets) — NOTHING stored in repo
+# Load workbook (bytes)
 # ──────────────────────────────────────────────────────────────────────────────
-def _hash_bytes(b: bytes) -> str:
-    return hashlib.sha256(b).hexdigest()
+@st.cache_data(show_spinner=False, ttl=600)  # cache for 10 minutes
+def load_workbook(file_bytes: bytes, file_label: str):
+    bio = io.BytesIO(file_bytes)
+    xl = pd.ExcelFile(bio, engine="openpyxl")
 
+    working = _read_sheet_smart(xl, ["Working Page", "TblWorkingView"])
+    data_tbl = _read_sheet_smart(xl, ["Data"])
+    u1_tbl = _read_sheet_smart(xl, ["U1"])
+    u2_tbl = _read_sheet_smart(xl, ["U2"])
 
-@st.cache_data(show_spinner=False, ttl=600)
-def _read_excel_bytes(file_bytes: bytes) -> Dict[str, pd.DataFrame]:
-    """Read Excel file and return dictionary of sheets"""
-    try:
-        # Read all sheets
-        xls = pd.ExcelFile(io.BytesIO(file_bytes))
-        
-        # Check for required sheets
-        required_sheets = ['Data', 'U1', 'U2']
-        available_sheets = xls.sheet_names
-        
-        missing_sheets = [sheet for sheet in required_sheets if sheet not in available_sheets]
-        if missing_sheets:
-            st.error(f"Missing required sheets in Excel file: {', '.join(missing_sheets)}")
-            st.info(f"Available sheets: {', '.join(available_sheets)}")
-            return {}
-        
-        # Read each sheet
-        sheets = {}
-        for sheet_name in required_sheets:
-            sheets[sheet_name] = xls.parse(sheet_name)
-        
-        return sheets
-    except Exception as e:
-        st.error(f"Error reading Excel file: {e}")
-        return {}
+    base_rate_col = _base_working_rate_col(working)
 
+    schedule_opts = []
+    if not data_tbl.empty and "schedule" in data_tbl.columns:
+        s = get_col(data_tbl, "schedule").dropna().astype(str).str.strip()
+        schedule_opts = sorted([v for v in s.unique().tolist() if v])
 
-def _load_tables_from_excel(excel_bytes: bytes) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Load Data, U1, and U2 sheets from Excel file"""
-    sheets = _read_excel_bytes(excel_bytes)
-    
-    if not sheets:
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
-    
-    data_tbl = _normalize_cols(sheets['Data'])
-    u1_tbl = _normalize_cols(sheets['U1'])
-    u2_tbl = _normalize_cols(sheets['U2'])
-    
-    return data_tbl, u1_tbl, u2_tbl
+    package_opts = [s for s, df in (("U1", u1_tbl), ("U2", u2_tbl)) if not df.empty] or ["U1", "U2"]
 
+    disciplines = list(DISCIPLINE_ROW_COUNTS.keys())
 
-with st.sidebar:
-    st.subheader("Rate Tables (Excel upload)")
-    st.caption("Upload MEC TOOL.xlsx file with Data, U1, and U2 sheets.")
-    
-    up_excel = st.file_uploader("MEC TOOL.xlsx", type=["xlsx"], key="up_excel")
-    
-    st.markdown("---")
-    st.subheader("Project Management")
-    
-    # Save current project
-    save_col1, save_col2 = st.columns([2, 1])
-    with save_col1:
-        save_name = st.text_input("Save as", value=st.session_state.get("project_title", ""), 
-                                 placeholder="Project name")
-    with save_col2:
-        if st.button("💾 Save", use_container_width=True):
-            if save_name.strip():
-                project_id = save_current_project(save_name.strip())
-                st.success(f"Saved: {save_name}")
-                st.session_state["current_project_id"] = project_id
-            else:
-                st.warning("Please enter a project name")
+    personnel_union = []
+    for _, plist in DEFAULT_PERSONNEL.items():
+        personnel_union.extend(plist)
+    if not working.empty and "personnel" in working.columns:
+        personnel_union.extend(get_col(working, "personnel").dropna().astype(str).tolist())
+    personnel_union = sorted(pd.Series(personnel_union).dropna().astype(str).drop_duplicates().tolist())
 
-    if st.button("Reset app session", use_container_width=True):
-        # Clear everything (safe reset)
-        for k in list(st.session_state.keys()):
-            if k not in [PROJECTS_KEY, COMPARE_KEY]:  # Keep saved projects
-                del st.session_state[k]
-        do_rerun()
+    return (
+        working,
+        data_tbl,
+        u1_tbl,
+        u2_tbl,
+        base_rate_col,
+        schedule_opts,
+        package_opts,
+        disciplines,
+        personnel_union,
+    )
 
-if not up_excel:
-    st.title("MEC TOOL")
-    st.info("Please upload **MEC TOOL.xlsx** file using the sidebar to start.")
-    st.markdown("""
-    ### File Requirements:
-    - **File name**: MEC TOOL.xlsx
-    - **Required sheets**: Data, U1, U2
-    - **Format**: Each sheet should contain rate tables with columns like:
-        - Discipline, Personnel, Category, Schedule
-        - Unit Rate columns (MYR/USD)
-        - Minimum/Maximum/Normalise rates
-    
-    ### Download Template:
-    [Download Sample MEC TOOL.xlsx Template](https://docs.google.com/spreadsheets/d/your-template-link-here)
-    """)
-    st.stop()
-
-# Read Excel file once
-excel_bytes = up_excel.getvalue()
-
-upload_fingerprint = _hash_bytes(excel_bytes)[:10]
-prev_fp = st.session_state.get("_upload_fp")
-
-if prev_fp and prev_fp != upload_fingerprint:
-    # Uploaded new file → reset grid to avoid mixing old selections
-    st.session_state.pop(GRID_KEY, None)
-    st.session_state.pop("_last_df_out", None)
-    st.session_state.pop("_last_totals", None)
-
-st.session_state["_upload_fp"] = upload_fingerprint
-
-try:
-    data_tbl, u1_tbl, u2_tbl = _load_tables_from_excel(excel_bytes)
-    
-    # Check if sheets are empty
-    if data_tbl.empty or u1_tbl.empty or u2_tbl.empty:
-        st.error("One or more sheets in the Excel file are empty or couldn't be read.")
-        st.info("Please ensure the Excel file contains Data, U1, and U2 sheets with data.")
-        st.stop()
-        
-except Exception as e:
-    st.error("Failed to read the Excel file. Please confirm it's a valid MEC TOOL.xlsx file.")
-    st.exception(e)
-    st.stop()
-
-# "Working Page" is not used in Excel upload mode
-working = pd.DataFrame()
-base_rate_col = None
-
-# Options
-schedule_opts = []
-if not data_tbl.empty and "schedule" in data_tbl.columns:
-    s = get_col(data_tbl, "schedule").dropna().astype(str).str.strip()
-    schedule_opts = sorted([v for v in s.unique().tolist() if v])
-
-package_opts = [s for s, df in (("U1", u1_tbl), ("U2", u2_tbl)) if not df.empty] or ["U1", "U2"]
-DISC_LIST = list(DISCIPLINE_ROW_COUNTS.keys())
-
-personnel_union = []
-for _, plist in DEFAULT_PERSONNEL.items():
-    personnel_union.extend(plist)
-PERSONNEL_LIST = sorted(pd.Series(personnel_union).dropna().astype(str).drop_duplicates().tolist())
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Rate lookup (relaxed matching)
@@ -700,9 +519,98 @@ def get_rate(
             if not m.empty:
                 return _to_float_safe(get_col(m, col).iloc[0])
 
-    # Excel mode: no "working" fallback
+    if not working.empty:
+        for c in working.columns:
+            k = _canon(c)
+            if "unit rate" in k and (rate_source.strip().lower() in k):
+                m = _relaxed_match(working, discipline, personnel, category, schedule)
+                if not m.empty:
+                    return _to_float_safe(get_col(m, c).iloc[0])
+
+    if base_rate_col and base_rate_col in working.columns:
+        m = _relaxed_match(working, discipline, personnel, category, schedule)
+        if not m.empty:
+            return _to_float_safe(get_col(m, base_rate_col).iloc[0])
+
     return 0.0
 
+
+# ──────────────────────────────────────────────────────────────────────────────
+# HARD NO-UPLOAD MODE — load from local folder
+# ──────────────────────────────────────────────────────────────────────────────
+DEFAULT_HOST_DIR = r"C:\mec_inputs" if os.name == "nt" else os.path.join(os.getcwd(), "input")
+SAFE_BASE_DIR = os.environ.get("MEC_ALLOWED_DIR", DEFAULT_HOST_DIR)
+DEFAULT_FILE_ENV = os.environ.get("MEC_DEFAULT_FILE", "MEC TOOL.xlsx").strip()
+os.makedirs(SAFE_BASE_DIR, exist_ok=True)
+
+
+def _list_xlsx(base):
+    try:
+        return sorted(
+            [f for f in os.listdir(base) if f.lower().endswith(".xlsx")],
+            key=lambda n: os.path.getmtime(os.path.join(base, n)),
+            reverse=True,
+        )
+    except Exception:
+        return []
+
+
+def _resolve_file():
+    if DEFAULT_FILE_ENV and os.path.isabs(DEFAULT_FILE_ENV) and os.path.exists(DEFAULT_FILE_ENV):
+        return DEFAULT_FILE_ENV
+    if DEFAULT_FILE_ENV:
+        candidate = os.path.join(SAFE_BASE_DIR, DEFAULT_FILE_ENV)
+        if os.path.exists(candidate):
+            return candidate
+    file_list = _list_xlsx(SAFE_BASE_DIR)
+    if file_list:
+        return os.path.join(SAFE_BASE_DIR, file_list[0])
+    raise FileNotFoundError(
+        f"No .xlsx found. Put a workbook named '{DEFAULT_FILE_ENV}' into:\n {SAFE_BASE_DIR}"
+    )
+
+
+with st.sidebar:
+    st.subheader("Workbook (local, no-upload)")
+    st.caption(f"Folder: {SAFE_BASE_DIR}")
+    if st.button("Reload file", use_container_width=True):
+        st.session_state.pop("file_bytes", None)
+        st.session_state.pop("file_label", None)
+        do_rerun()
+    st.markdown(
+        """
+Drop your MEC workbook in the folder above, then click Reload.
+""",
+        unsafe_allow_html=True,
+    )
+
+file_bytes = st.session_state.get("file_bytes")
+file_label = st.session_state.get("file_label")
+if not file_bytes:
+    try:
+        path = _resolve_file()
+        with open(path, "rb") as f:
+            file_bytes = f.read()
+        file_label = os.path.basename(path)
+        st.session_state["file_bytes"] = file_bytes
+        st.session_state["file_label"] = file_label
+        st.success(f"Loaded: {file_label}")
+    except Exception as e:
+        st.error(str(e))
+        st.stop()
+
+# Parse workbook from bytes
+(
+    working,
+    data_tbl,
+    u1_tbl,
+    u2_tbl,
+    base_rate_col,
+    schedule_opts,
+    package_opts,
+    DISC_LIST,
+    PERSONNEL_LIST,
+) = load_workbook(file_bytes, file_label)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Session defaults
@@ -715,7 +623,6 @@ st.session_state.setdefault("project_date", None)
 st.session_state.setdefault("type_of_package", package_opts[0] if package_opts else "U1")
 st.session_state.setdefault("type_of_schedule", schedule_opts[0] if schedule_opts else "Schedule A")
 st.session_state.setdefault("rate_source", RATE_SOURCES[0])
-st.session_state.setdefault(COMPARE_KEY, [])
 
 if GRID_KEY not in st.session_state:
     rows = []
@@ -790,6 +697,7 @@ def compute_line_items(grid_df: pd.DataFrame, currency: str, rate_source: str, t
         return val
 
     df = grid_df.copy()
+    # downcast types to reduce payload
     for col in ["Weightage (FTE)", "Duration (months)"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").astype("float32")
@@ -894,31 +802,21 @@ def to_excel_bytes(main_meta: pd.DataFrame, totals: pd.DataFrame, lines: pd.Data
         ws[f"C{r}"].value = lbl
         ws[f"E{r}"].value = val
         ws[f"C{r}"].font = Font(bold=True)
-        paint_range(
-            ws,
-            f"E{r}:I{r}",
-            fill=PatternFill("solid", fgColor=LIGHT),
-            border=Border(left=THIN, right=THIN, top=THIN, bottom=THIN),
-        )
+        paint_range(ws, f"E{r}:I{r}", fill=PatternFill("solid", fgColor=LIGHT), border=Border(left=THIN, right=THIN, top=THIN, bottom=THIN))
 
     notes = r0 + len(fields) + 3
     ws[f"C{notes}"].value = "Notes:"
     ws[f"C{notes}"].font = Font(bold=True)
     ws[f"C{notes+2}"].value = "Type of Package"
-    ws[f"C{notes+3}"].value = "Package U1"
-    ws[f"E{notes+3}"].value = "Feasibility Study & Conceptual Engineering for Upstream"
-    ws[f"C{notes+4}"].value = "Package U2"
-    ws[f"E{notes+4}"].value = "FEED & Detailed Design for Upstream"
-    ws[f"C{notes+6}"].value = "Type of Schedule"
-    ws[f"F{notes+6}"].value = "Currency"
-    for i, (tag, desc, cur) in enumerate(
-        [
-            ("Schedule A", "Malaysia Project (Malaysia Base)", "MYR"),
-            ("Schedule B", "Malaysia Project (International Base)", "USD"),
-            ("Schedule C", "International Project (Malaysia Base)", "MYR"),
-            ("Schedule D", "International Project (International Base)", "USD"),
-        ]
-    ):
+    ws[f"C{notes+3}"].value = "Package U1"; ws[f"E{notes+3}"].value = "Feasibility Study & Conceptual Engineering for Upstream"
+    ws[f"C{notes+4}"].value = "Package U2"; ws[f"E{notes+4}"].value = "FEED & Detailed Design for Upstream"
+    ws[f"C{notes+6}"].value = "Type of Schedule"; ws[f"F{notes+6}"].value = "Currency"
+    for i, (tag, desc, cur) in enumerate([
+        ("Schedule A", "Malaysia Project (Malaysia Base)", "MYR"),
+        ("Schedule B", "Malaysia Project (International Base)", "USD"),
+        ("Schedule C", "International Project (Malaysia Base)", "MYR"),
+        ("Schedule D", "International Project (International Base)", "USD"),
+    ]):
         rr = notes + 7 + i
         ws[f"C{rr}"].value = tag
         ws[f"D{rr}"].value = desc
@@ -927,7 +825,7 @@ def to_excel_bytes(main_meta: pd.DataFrame, totals: pd.DataFrame, lines: pd.Data
     set_col_w(ws, {"B": 2, "C": 22, "D": 40, "E": 36, "F": 12, "G": 10, "H": 10, "I": 6})
     ws.freeze_panes = "B6"
 
-    # Working Page (export)
+    # Working Page
     ws2 = wb.create_sheet("Working Page")
     unit_rate_col = next((c for c in lines.columns if c.startswith("Unit Rate (")), f"Unit Rate ({currency})")
     total_cost_col = next((c for c in lines.columns if c.startswith("Total Cost (")), f"Total Cost ({currency})")
@@ -968,11 +866,11 @@ def to_excel_bytes(main_meta: pd.DataFrame, totals: pd.DataFrame, lines: pd.Data
         c.alignment = Alignment(horizontal="center")
         c.border = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 
-    def set_col_w2(ws, widths):
+    def set_col_w(ws, widths):
         for col, w in widths.items():
             ws.column_dimensions[col].width = w
 
-    set_col_w2(ws2, {"B": 16, "C": 30, "D": 18, "E": 18, "F": 14, "U": 22})
+    set_col_w(ws2, {"B": 16, "C": 30, "D": 18, "E": 18, "F": 14, "U": 22})
     ws2.freeze_panes = "B6"
 
     cur_r = start_row + 1
@@ -1093,8 +991,7 @@ def stepper(active: str):
     """,
         unsafe_allow_html=True,
     )
-    steps = [("MAIN", "Main Page"), ("TABLE", "Personnel Table"), ("TOTALS", "Totals & Line Items"), 
-             ("SUMMARY", "Summary & Download"), ("COMPARE", "Compare Projects")]
+    steps = [("MAIN", "Main Page"), ("TABLE", "Personnel Table"), ("TOTALS", "Totals & Line Items"), ("SUMMARY", "Summary & Download")]
     html = '<div class="mec-steps">'
     for key, label in steps:
         cls = "mec-step active" if key == active else "mec-step"
@@ -1128,339 +1025,17 @@ def reset_grid():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# COMPARE PROJECTS PAGE
-# ──────────────────────────────────────────────────────────────────────────────
-def render_compare():
-    stepper("COMPARE")
-    st.header("📊 Project Comparison")
-    
-    # Get saved projects
-    projects_df = get_project_summary_df()
-    
-    if projects_df.empty:
-        st.info("No saved projects found. Save your current project from the Main Page or Summary Page to enable comparison.")
-        st.markdown("<br/>", unsafe_allow_html=True)
-        if st.button("⬅️ Back to Main Page", use_container_width=True):
-            st.session_state["page"] = "MAIN"
-            do_rerun()
-        return
-    
-    st.subheader("Saved Projects")
-    
-    # Display saved projects with checkboxes for comparison
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        st.dataframe(
-            projects_df.drop(columns=["ID"]),
-            use_container_width=True,
-            column_config={
-                "Total Manhour": st.column_config.NumberColumn(format="%.0f"),
-                "Avg Rate": st.column_config.NumberColumn(format="%.2f"),
-                "Total Cost": st.column_config.NumberColumn(format="%.0f"),
-            }
-        )
-    
-    with col2:
-        st.markdown("### Compare Selection")
-        # Checkboxes for project selection
-        for _, row in projects_df.iterrows():
-            is_selected = st.checkbox(
-                f"{row['Project Name']} ({row['Currency']})",
-                value=row['ID'] in st.session_state[COMPARE_KEY],
-                key=f"compare_{row['ID']}"
-            )
-            if is_selected and row['ID'] not in st.session_state[COMPARE_KEY]:
-                st.session_state[COMPARE_KEY].append(row['ID'])
-            elif not is_selected and row['ID'] in st.session_state[COMPARE_KEY]:
-                st.session_state[COMPARE_KEY].remove(row['ID'])
-        
-        # Clear selection button
-        if st.button("Clear Selection", use_container_width=True):
-            st.session_state[COMPARE_KEY] = []
-            do_rerun()
-        
-        # Load selected project button
-        if st.session_state[COMPARE_KEY]:
-            selected_id = st.selectbox(
-                "Load project to edit:",
-                options=st.session_state[COMPARE_KEY],
-                format_func=lambda x: st.session_state[PROJECTS_KEY][x]["name"]
-            )
-            if st.button("📂 Load Selected", use_container_width=True):
-                if load_project(selected_id):
-                    st.success(f"Loaded: {st.session_state[PROJECTS_KEY][selected_id]['name']}")
-                    st.session_state["page"] = "MAIN"
-                    do_rerun()
-    
-    # Comparison analysis (only if at least 2 projects selected)
-    if len(st.session_state[COMPARE_KEY]) >= 2:
-        st.markdown("---")
-        st.subheader("📈 Comparison Analysis")
-        
-        # Get selected projects data
-        selected_projects = []
-        for project_id in st.session_state[COMPARE_KEY]:
-            if project_id in st.session_state.get(PROJECTS_KEY, {}):
-                selected_projects.append(st.session_state[PROJECTS_KEY][project_id])
-        
-        if len(selected_projects) >= 2:
-            # 1. High-level metrics comparison
-            st.markdown("#### Key Metrics Comparison")
-            
-            metrics_data = []
-            for project in selected_projects:
-                metrics_data.append({
-                    "Project": project["name"],
-                    "Currency": project.get("currency", "N/A"),
-                    "Total Manhour": project.get("total_manhour", 0),
-                    "Avg Rate": project.get("avg_rate", 0),
-                    "Total Cost": project.get("total_exact", 0),
-                    "Cost per Manhour": project.get("total_exact", 0) / project.get("total_manhour", 1) if project.get("total_manhour", 0) > 0 else 0
-                })
-            
-            metrics_df = pd.DataFrame(metrics_data)
-            
-            # Display metrics in columns
-            cols = st.columns(len(selected_projects))
-            for idx, (col, project) in enumerate(zip(cols, selected_projects)):
-                with col:
-                    st.markdown(f'<div class="project-card">', unsafe_allow_html=True)
-                    st.markdown(f"**{project['name']}**")
-                    st.markdown(f"*{project['metadata']['type_of_schedule']}*")
-                    st.metric("Total Cost", f"{project.get('total_exact', 0):,.0f} {project.get('currency', '')}")
-                    st.metric("Manhours", f"{project.get('total_manhour', 0):,.0f}")
-                    st.metric("Avg Rate", f"{project.get('avg_rate', 0):,.2f} {project.get('currency', '')}")
-                    st.markdown('</div>', unsafe_allow_html=True)
-            
-            # 2. Visual Comparison Charts
-            st.markdown("#### Visual Comparison")
-            
-            tab1, tab2, tab3, tab4 = st.tabs(["📊 Cost Comparison", "⏱️ Manhour Comparison", "💰 Rate Analysis", "📋 Detailed View"])
-            
-            with tab1:
-                # Bar chart for total costs
-                fig_cost = go.Figure(data=[
-                    go.Bar(
-                        name='Total Cost',
-                        x=metrics_df['Project'],
-                        y=metrics_df['Total Cost'],
-                        text=[f"{v:,.0f} {c}" for v, c in zip(metrics_df['Total Cost'], metrics_df['Currency'])],
-                        textposition='auto',
-                        marker_color=BRAND1
-                    )
-                ])
-                fig_cost.update_layout(
-                    title='Total Cost Comparison',
-                    xaxis_title='Project',
-                    yaxis_title='Total Cost',
-                    showlegend=False,
-                    template='plotly_white'
-                )
-                st.plotly_chart(fig_cost, use_container_width=True)
-            
-            with tab2:
-                # Bar chart for manhours
-                fig_mh = go.Figure(data=[
-                    go.Bar(
-                        name='Total Manhour',
-                        x=metrics_df['Project'],
-                        y=metrics_df['Total Manhour'],
-                        text=[f"{v:,.0f}" for v in metrics_df['Total Manhour']],
-                        textposition='auto',
-                        marker_color=BRAND2
-                    )
-                ])
-                fig_mh.update_layout(
-                    title='Total Manhour Comparison',
-                    xaxis_title='Project',
-                    yaxis_title='Total Manhour',
-                    showlegend=False,
-                    template='plotly_white'
-                )
-                st.plotly_chart(fig_mh, use_container_width=True)
-            
-            with tab3:
-                # Scatter plot: Cost vs Manhour
-                fig_scatter = go.Figure()
-                for idx, row in metrics_df.iterrows():
-                    fig_scatter.add_trace(go.Scatter(
-                        x=[row['Total Manhour']],
-                        y=[row['Total Cost']],
-                        mode='markers+text',
-                        name=row['Project'],
-                        text=[row['Project']],
-                        textposition="top center",
-                        marker=dict(size=15, color=BRAND1),
-                        hovertemplate=f"Project: {row['Project']}<br>"
-                                    f"Manhour: {row['Total Manhour']:,.0f}<br>"
-                                    f"Cost: {row['Total Cost']:,.0f} {row['Currency']}<br>"
-                                    f"Cost/Manhour: {row['Cost per Manhour']:,.2f}"
-                    ))
-                
-                fig_scatter.update_layout(
-                    title='Cost vs Manhour (Bubble Size = Avg Rate)',
-                    xaxis_title='Total Manhour',
-                    yaxis_title=f'Total Cost',
-                    template='plotly_white',
-                    showlegend=True
-                )
-                st.plotly_chart(fig_scatter, use_container_width=True)
-            
-            with tab4:
-                # Detailed comparison table
-                st.dataframe(
-                    metrics_df,
-                    use_container_width=True,
-                    column_config={
-                        "Project": st.column_config.TextColumn(width="medium"),
-                        "Currency": st.column_config.TextColumn(width="small"),
-                        "Total Manhour": st.column_config.NumberColumn(format="%.0f"),
-                        "Avg Rate": st.column_config.NumberColumn(format="%.2f"),
-                        "Total Cost": st.column_config.NumberColumn(format="%.0f"),
-                        "Cost per Manhour": st.column_config.NumberColumn(format="%.2f"),
-                    }
-                )
-            
-            # 3. Rate Comparison by Discipline (if available)
-            st.markdown("#### Rate Comparison by Discipline")
-            
-            # Collect discipline-level data
-            discipline_data = []
-            for project in selected_projects:
-                if project.get("line_items"):
-                    df_items = pd.DataFrame(project["line_items"])
-                    # Get unique unit rate column name
-                    rate_col = next((c for c in df_items.columns if "Unit Rate" in c), None)
-                    if rate_col:
-                        for disc in df_items["Discipline"].unique():
-                            disc_rates = df_items[df_items["Discipline"] == disc][rate_col]
-                            if not disc_rates.empty:
-                                discipline_data.append({
-                                    "Project": project["name"],
-                                    "Discipline": disc,
-                                    "Avg Rate": disc_rates.mean(),
-                                    "Currency": project.get("currency", "")
-                                })
-            
-            if discipline_data:
-                disc_df = pd.DataFrame(discipline_data)
-                
-                # Pivot for heatmap
-                pivot_df = disc_df.pivot(index="Discipline", columns="Project", values="Avg Rate")
-                
-                # Create heatmap
-                fig_heatmap = go.Figure(data=go.Heatmap(
-                    z=pivot_df.values,
-                    x=pivot_df.columns,
-                    y=pivot_df.index,
-                    colorscale='Viridis',
-                    text=[[f"{v:,.0f}" for v in row] for row in pivot_df.values],
-                    texttemplate="%{text}",
-                    textfont={"size": 10}
-                ))
-                
-                fig_heatmap.update_layout(
-                    title='Average Rate by Discipline (Heatmap)',
-                    xaxis_title='Project',
-                    yaxis_title='Discipline',
-                    height=max(400, len(pivot_df) * 30)
-                )
-                st.plotly_chart(fig_heatmap, use_container_width=True)
-                
-                # Bar chart comparison for each discipline
-                selected_discipline = st.selectbox(
-                    "Select Discipline for detailed rate comparison:",
-                    options=sorted(disc_df["Discipline"].unique())
-                )
-                
-                if selected_discipline:
-                    disc_comparison = disc_df[disc_df["Discipline"] == selected_discipline]
-                    fig_disc = go.Figure(data=[
-                        go.Bar(
-                            x=disc_comparison["Project"],
-                            y=disc_comparison["Avg Rate"],
-                            text=[f"{v:,.0f} {c}" for v, c in zip(disc_comparison["Avg Rate"], disc_comparison["Currency"])],
-                            textposition='auto',
-                            marker_color=BRAND1
-                        )
-                    ])
-                    fig_disc.update_layout(
-                        title=f'Average Rate for {selected_discipline}',
-                        xaxis_title='Project',
-                        yaxis_title='Average Rate',
-                        showlegend=False
-                    )
-                    st.plotly_chart(fig_disc, use_container_width=True)
-            
-            # 4. Export comparison report
-            st.markdown("#### Export Comparison Report")
-            
-            # Create comparison summary
-            comparison_summary = {
-                "comparison_date": datetime.now().isoformat(),
-                "projects_compared": [p["name"] for p in selected_projects],
-                "metrics_comparison": metrics_data,
-                "notes": "Generated by MEC TOOL Project Comparison"
-            }
-            
-            # Export options
-            col1, col2 = st.columns(2)
-            with col1:
-                # JSON export
-                json_str = json.dumps(comparison_summary, indent=2)
-                st.download_button(
-                    label="📥 Download JSON Report",
-                    data=json_str,
-                    file_name="project_comparison.json",
-                    mime="application/json",
-                    use_container_width=True
-                )
-            
-            with col2:
-                # CSV export of metrics
-                csv_data = metrics_df.to_csv(index=False)
-                st.download_button(
-                    label="📊 Download CSV Metrics",
-                    data=csv_data,
-                    file_name="project_metrics.csv",
-                    mime="text/csv",
-                    use_container_width=True
-                )
-    
-    elif len(st.session_state[COMPARE_KEY]) == 1:
-        st.info("Select at least 2 projects for comparison.")
-    
-    # Project management
-    st.markdown("---")
-    st.subheader("Project Management")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        if st.button("🗑️ Delete All Projects", use_container_width=True):
-            st.session_state[PROJECTS_KEY] = {}
-            st.session_state[COMPARE_KEY] = []
-            st.success("All projects deleted!")
-            do_rerun()
-    
-    with col2:
-        if st.button("⬅️ Back to Summary", use_container_width=True):
-            st.session_state["page"] = "SUMMARY"
-            do_rerun()
-    
-    with col3:
-        if st.button("🏠 Back to Main", use_container_width=True):
-            st.session_state["page"] = "MAIN"
-            do_rerun()
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Page renderers (MAIN, TABLE, TOTALS, SUMMARY)
+# Page renderers
 # ──────────────────────────────────────────────────────────────────────────────
 def render_main():
     stepper("MAIN")
-    st.markdown("# MEC TOOL", unsafe_allow_html=True)
-    st.caption("Input mode: Excel upload (MEC TOOL.xlsx with Data, U1, U2 sheets)")
+    st.markdown(
+        """
+# MEC TOOL
+""",
+        unsafe_allow_html=True,
+    )
+    st.caption(f"Workbook: {st.session_state.get('file_label','(loaded)')}")
 
     st.markdown("<hr/>", unsafe_allow_html=True)
     st.header("Main Page")
@@ -1516,12 +1091,7 @@ def render_main():
         st.caption("Hours = Weightage × 176 × Duration (months)")
 
     st.markdown("<br/>", unsafe_allow_html=True)
-    
-    # Show saved projects count
-    if PROJECTS_KEY in st.session_state and st.session_state[PROJECTS_KEY]:
-        st.info(f"📁 You have {len(st.session_state[PROJECTS_KEY])} saved project(s). Go to Compare Projects page to analyze them.")
-    
-    c1, c2, c3 = st.columns([1, 1, 1])
+    c1, c2 = st.columns([1, 1])
     with c1:
         if st.button("➡️ Go to Personnel Table", use_container_width=True):
             st.session_state["page"] = "TABLE"
@@ -1529,10 +1099,6 @@ def render_main():
     with c2:
         if st.button("↺ Reset Grid to Defaults", use_container_width=True):
             reset_grid()
-            do_rerun()
-    with c3:
-        if st.button("📊 Compare Projects", use_container_width=True):
-            st.session_state["page"] = "COMPARE"
             do_rerun()
 
 
@@ -1612,6 +1178,7 @@ def render_table():
     # ── AG Grid ────────────────────────────────────────────────────────────────
     df = st.session_state[GRID_KEY].copy()
 
+    # Downcast types: categorical reduces JSON payload
     categoricals = ["Discipline", "Personnel", "Category", "Type of Unit Rate"]
     for col in categoricals:
         if col in df.columns:
@@ -1620,6 +1187,7 @@ def render_table():
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").astype("float32")
 
+    # Dynamic grid height
     row_height, header_height = 34, 36
     grid_height = min(700, max(260, int(len(df) * row_height + header_height + 16)))
 
@@ -1660,6 +1228,7 @@ def render_table():
     gb.configure_column("Weightage (FTE)", type=["numericColumn"], width=170, editable=True)
     gb.configure_column("Duration (months)", type=["numericColumn"], width=170, editable=True)
 
+    # Row tint by discipline
     disc_bg = {k: f"#{v}" for k, v in DISCIPLINE_COLORS.items()}
     row_style_js = JsCode(
         """
@@ -1669,8 +1238,7 @@ function(params) {
   const bg = map[disc] || null;
   return bg ? { backgroundColor: bg } : null;
 }
-"""
-        % json.dumps(disc_bg)
+""" % json.dumps(disc_bg)
     )
     gb.configure_grid_options(getRowStyle=row_style_js)
     grid_opts = gb.build()
@@ -1683,22 +1251,29 @@ function(params) {
         theme="streamlit",
     )
 
+    # Debounce computations for performance
     st.markdown(" ")
     col_db1, col_db2 = st.columns([1, 1])
     with col_db1:
-        auto_recalc = st.toggle("Auto-recalculate totals", value=True, help="Turn off for faster editing on large tables.")
+        auto_recalc = st.toggle(
+            "Auto‑recalculate totals",
+            value=True,
+            help="Turn off for faster editing on large tables.",
+        )
     with col_db2:
         recalc_clicked = st.button("Recalculate now", use_container_width=True)
     should_recalc = auto_recalc or recalc_clicked
 
     try:
-        grid_resp = AgGrid(df, update_on="value_changed", **aggrid_common)
+        grid_resp = AgGrid(df, update_on="value_changed", **aggrid_common)  # new API
     except TypeError:
+        # Fallback to old API name
         grid_resp = AgGrid(df, update_mode=GridUpdateMode.VALUE_CHANGED, **aggrid_common)
 
     df_current = pd.DataFrame(grid_resp["data"])
     st.session_state[GRID_KEY] = df_current
 
+    # Results at bottom
     if should_recalc:
         df_out = compute_line_items(st.session_state[GRID_KEY], currency, rate_source, type_of_schedule)
         total_manhour, avg_rate, total_by_average, total_exact, totals = compute_totals(df_out, currency)
@@ -1802,39 +1377,22 @@ def render_summary():
     st.subheader("Main Page (entered)")
     st.dataframe(main_meta, use_container_width=True)
 
-    # Save project button in summary
-    st.markdown("---")
-    col_save1, col_save2, col_save3 = st.columns([2, 1, 1])
-    with col_save1:
-        save_name = st.text_input(
-            "Save this project as:", 
-            value=st.session_state.get("project_title", ""),
-            placeholder="Enter project name"
-        )
-    with col_save2:
-        if st.button("💾 Save Project", use_container_width=True):
-            if save_name.strip():
-                project_id = save_current_project(save_name.strip())
-                st.success(f"Project '{save_name}' saved!")
-                st.session_state["current_project_id"] = project_id
-            else:
-                st.warning("Please enter a project name")
-    with col_save3:
-        if st.button("📊 Compare Projects", use_container_width=True):
-            st.session_state["page"] = "COMPARE"
-            do_rerun()
-
-    # Visuals
+    # =========================
+    # Visuals (colored)
+    # =========================
     if not df_out.empty:
+        # Build color map for disciplines from XLSX tint palette
         discipline_color_map = {d: f"#{DISCIPLINE_COLORS.get(d, 'D1D5DB')}" for d in df_out["Discipline"].unique()}
 
         st.subheader("Visual Summary")
 
+        # Chart 1: Total Price by Discipline (Bar)
         totals_disp = (
             df_out.groupby("Discipline", as_index=False)[f"Total Cost ({currency})"]
             .sum()
             .sort_values(by=f"Total Cost ({currency})", ascending=False)
         )
+        # Round to reduce payload
         totals_disp[f"Total Cost ({currency})"] = totals_disp[f"Total Cost ({currency})"].round(2)
 
         fig_bar = px.bar(
@@ -1856,6 +1414,7 @@ def render_summary():
         )
         st.plotly_chart(fig_bar, use_container_width=True)
 
+        # Chart 2: Cost Share by Category (Donut)
         cat_disp = (
             df_out.groupby("Category", as_index=False)[f"Total Cost ({currency})"]
             .sum()
@@ -1872,11 +1431,7 @@ def render_summary():
                 color_discrete_sequence=brand_seq,
                 title=f"Cost Share by Category ({currency})",
             )
-            fig_donut.update_traces(
-                textposition="inside",
-                textinfo="percent+label",
-                hovertemplate="%{label}<br>%{value:,.2f}",
-            )
+            fig_donut.update_traces(textposition="inside", textinfo="percent+label", hovertemplate="%{label}<br>%{value:,.2f}")
             fig_donut.update_layout(
                 title_x=0.0,
                 showlegend=True,
@@ -1889,29 +1444,34 @@ def render_summary():
 
         st.caption("Tips: Use the Personnel Table to adjust Weightage/Duration and see instant visual updates here.")
 
-    # Download output Excel
+    # Download
     excel_blob = to_excel_bytes(main_meta, totals, df_out, schedule_label=type_of_schedule, currency=currency)
-    st.download_button(
-        "⬇️ Download Summary (Excel)",
-        data=excel_blob,
-        file_name="MEC_TOOL_Output.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        type="primary",
-        help="Main Page, Working Page (tinted & subtotals), and Summary — styled & currency-aware",
-    )
+    try:
+        st.download_button(
+            "⬇️ Download Summary (Excel)",
+            data=excel_blob,
+            file_name="MEC_TOOL_Output.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            type="primary",
+            help="Main Page, Working Page (tinted & subtotals), and Summary — styled & currency-aware",
+        )
+    except TypeError:
+        st.download_button(
+            "⬇️ Download Summary (Excel)",
+            data=excel_blob,
+            file_name="MEC_TOOL_Output.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            help="Main Page, Working Page (tinted & subtotals), and Summary — styled & currency-aware",
+        )
 
-    c1, c2, c3 = st.columns([1, 1, 1])
+    c1, c2 = st.columns([1, 1])
     with c1:
         if st.button("⬅️ Back to Totals", use_container_width=True):
             st.session_state["page"] = "TOTALS"
             do_rerun()
     with c2:
-        if st.button("🏠 Back to Main Page", use_container_width=True):
+        if st.button("🔁 Back to Main Page", use_container_width=True):
             st.session_state["page"] = "MAIN"
-            do_rerun()
-    with c3:
-        if st.button("📊 Compare Projects", use_container_width=True):
-            st.session_state["page"] = "COMPARE"
             do_rerun()
 
 
@@ -1927,8 +1487,6 @@ elif page == "TOTALS":
     render_totals()
 elif page == "SUMMARY":
     render_summary()
-elif page == "COMPARE":
-    render_compare()
 else:
     st.session_state["page"] = "MAIN"
     do_rerun()
