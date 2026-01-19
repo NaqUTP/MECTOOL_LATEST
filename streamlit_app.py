@@ -1,11 +1,11 @@
 # streamlit_app.py
-# MEC TOOL – Streamlit app (CSV upload mode; no internal files in repo)
+# MEC TOOL – Streamlit app (Excel upload mode; no internal files in repo)
 # Author: Ahmad Naquib Syahmee Masror (Dev/Upstream)
 # Updated: 2025-12-17
 # ADDED: Project Comparison Feature
+# MODIFIED: Single Excel file input (MEC TOOL.xlsx)
 
 import io
-import os
 import re
 import json
 import warnings
@@ -499,30 +499,59 @@ def _rate_col_for_unit_type(df: pd.DataFrame, unit_type: str, prefer_usd: bool) 
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# CSV Upload Mode (3 separate uploads) — NOTHING stored in repo
+# Excel Upload Mode (single file with 3 sheets) — NOTHING stored in repo
 # ──────────────────────────────────────────────────────────────────────────────
 def _hash_bytes(b: bytes) -> str:
     return hashlib.sha256(b).hexdigest()
 
 
 @st.cache_data(show_spinner=False, ttl=600)
-def _read_csv_bytes(file_bytes: bytes) -> pd.DataFrame:
-    return pd.read_csv(io.BytesIO(file_bytes))
+def _read_excel_bytes(file_bytes: bytes) -> Dict[str, pd.DataFrame]:
+    """Read Excel file and return dictionary of sheets"""
+    try:
+        # Read all sheets
+        xls = pd.ExcelFile(io.BytesIO(file_bytes))
+        
+        # Check for required sheets
+        required_sheets = ['Data', 'U1', 'U2']
+        available_sheets = xls.sheet_names
+        
+        missing_sheets = [sheet for sheet in required_sheets if sheet not in available_sheets]
+        if missing_sheets:
+            st.error(f"Missing required sheets in Excel file: {', '.join(missing_sheets)}")
+            st.info(f"Available sheets: {', '.join(available_sheets)}")
+            return {}
+        
+        # Read each sheet
+        sheets = {}
+        for sheet_name in required_sheets:
+            sheets[sheet_name] = xls.parse(sheet_name)
+        
+        return sheets
+    except Exception as e:
+        st.error(f"Error reading Excel file: {e}")
+        return {}
 
 
-def _load_tables_from_uploads(data_bytes: bytes, u1_bytes: bytes, u2_bytes: bytes) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    data_tbl = _normalize_cols(_read_csv_bytes(data_bytes))
-    u1_tbl = _normalize_cols(_read_csv_bytes(u1_bytes))
-    u2_tbl = _normalize_cols(_read_csv_bytes(u2_bytes))
+def _load_tables_from_excel(excel_bytes: bytes) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Load Data, U1, and U2 sheets from Excel file"""
+    sheets = _read_excel_bytes(excel_bytes)
+    
+    if not sheets:
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+    
+    data_tbl = _normalize_cols(sheets['Data'])
+    u1_tbl = _normalize_cols(sheets['U1'])
+    u2_tbl = _normalize_cols(sheets['U2'])
+    
     return data_tbl, u1_tbl, u2_tbl
 
 
 with st.sidebar:
-    st.subheader("Rate Tables (CSV uploads)")
-    st.caption("Upload all 3 CSV files. Nothing is stored in the repo.")
-    up_data = st.file_uploader("Data.csv", type=["csv"], key="up_data")
-    up_u1 = st.file_uploader("U1.csv", type=["csv"], key="up_u1")
-    up_u2 = st.file_uploader("U2.csv", type=["csv"], key="up_u2")
+    st.subheader("Rate Tables (Excel upload)")
+    st.caption("Upload MEC TOOL.xlsx file with Data, U1, and U2 sheets.")
+    
+    up_excel = st.file_uploader("MEC TOOL.xlsx", type=["xlsx"], key="up_excel")
     
     st.markdown("---")
     st.subheader("Project Management")
@@ -548,21 +577,31 @@ with st.sidebar:
                 del st.session_state[k]
         do_rerun()
 
-if not (up_data and up_u1 and up_u2):
+if not up_excel:
     st.title("MEC TOOL")
-    st.info("Please upload **Data.csv**, **U1.csv**, and **U2.csv** using the sidebar to start.")
+    st.info("Please upload **MEC TOOL.xlsx** file using the sidebar to start.")
+    st.markdown("""
+    ### File Requirements:
+    - **File name**: MEC TOOL.xlsx
+    - **Required sheets**: Data, U1, U2
+    - **Format**: Each sheet should contain rate tables with columns like:
+        - Discipline, Personnel, Category, Schedule
+        - Unit Rate columns (MYR/USD)
+        - Minimum/Maximum/Normalise rates
+    
+    ### Download Template:
+    [Download Sample MEC TOOL.xlsx Template](https://docs.google.com/spreadsheets/d/your-template-link-here)
+    """)
     st.stop()
 
-# Read bytes once (streamlit UploadedFile is file-like; .getvalue() gives stable bytes)
-data_bytes = up_data.getvalue()
-u1_bytes = up_u1.getvalue()
-u2_bytes = up_u2.getvalue()
+# Read Excel file once
+excel_bytes = up_excel.getvalue()
 
-upload_fingerprint = _hash_bytes(data_bytes)[:10] + _hash_bytes(u1_bytes)[:10] + _hash_bytes(u2_bytes)[:10]
+upload_fingerprint = _hash_bytes(excel_bytes)[:10]
 prev_fp = st.session_state.get("_upload_fp")
 
 if prev_fp and prev_fp != upload_fingerprint:
-    # Uploaded new tables → reset grid to avoid mixing old selections
+    # Uploaded new file → reset grid to avoid mixing old selections
     st.session_state.pop(GRID_KEY, None)
     st.session_state.pop("_last_df_out", None)
     st.session_state.pop("_last_totals", None)
@@ -570,13 +609,20 @@ if prev_fp and prev_fp != upload_fingerprint:
 st.session_state["_upload_fp"] = upload_fingerprint
 
 try:
-    data_tbl, u1_tbl, u2_tbl = _load_tables_from_uploads(data_bytes, u1_bytes, u2_bytes)
+    data_tbl, u1_tbl, u2_tbl = _load_tables_from_excel(excel_bytes)
+    
+    # Check if sheets are empty
+    if data_tbl.empty or u1_tbl.empty or u2_tbl.empty:
+        st.error("One or more sheets in the Excel file are empty or couldn't be read.")
+        st.info("Please ensure the Excel file contains Data, U1, and U2 sheets with data.")
+        st.stop()
+        
 except Exception as e:
-    st.error("Failed to read one of the CSV files. Please confirm they are valid CSV exports.")
+    st.error("Failed to read the Excel file. Please confirm it's a valid MEC TOOL.xlsx file.")
     st.exception(e)
     st.stop()
 
-# "Working Page" is not used in CSV upload mode
+# "Working Page" is not used in Excel upload mode
 working = pd.DataFrame()
 base_rate_col = None
 
@@ -654,7 +700,7 @@ def get_rate(
             if not m.empty:
                 return _to_float_safe(get_col(m, col).iloc[0])
 
-    # CSV mode: no "working" fallback
+    # Excel mode: no "working" fallback
     return 0.0
 
 
@@ -1414,7 +1460,7 @@ def render_compare():
 def render_main():
     stepper("MAIN")
     st.markdown("# MEC TOOL", unsafe_allow_html=True)
-    st.caption("Input mode: CSV uploads (Data.csv, U1.csv, U2.csv)")
+    st.caption("Input mode: Excel upload (MEC TOOL.xlsx with Data, U1, U2 sheets)")
 
     st.markdown("<hr/>", unsafe_allow_html=True)
     st.header("Main Page")
@@ -1446,7 +1492,7 @@ def render_main():
             ),
         )
         st.session_state["type_of_schedule"] = st.selectbox(
-            "Type of Schedule (from Data.csv)",
+            "Type of Schedule (from Data sheet)",
             schedule_opts if schedule_opts else ["Schedule A", "Schedule B", "Schedule C", "Schedule D"],
             index=0
             if not schedule_opts
