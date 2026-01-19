@@ -9,7 +9,7 @@ import re
 import json
 import warnings
 from typing import Dict, List, Optional
-
+from datetime import datetime
 import pandas as pd
 import streamlit as st
 
@@ -30,6 +30,8 @@ except Exception:
 # Plotly for visuals
 try:
     import plotly.express as px
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
 except Exception:
     st.error(
         "Missing dependency plotly.\n\n"
@@ -100,6 +102,59 @@ def apply_theme(dark: bool, brand1: str, brand2: str, muted: str) -> None:
       /* Panels/tables */
       .stDataFrame, .st-emotion-cache-oco5fk, .st-emotion-cache-1k2qj1w {{
         background: var(--surface-alt);
+      }}
+      /* Custom cards */
+      .metric-card {{
+        background: var(--surface-alt);
+        border-radius: 10px;
+        padding: 1.5rem;
+        border-left: 4px solid var(--brand1);
+        margin-bottom: 1rem;
+      }}
+      .metric-card h3 {{
+        color: var(--text-muted);
+        font-size: 0.9rem;
+        margin-bottom: 0.5rem;
+        font-weight: 600;
+      }}
+      .metric-card .value {{
+        color: var(--text);
+        font-size: 1.8rem;
+        font-weight: 700;
+        line-height: 1.2;
+      }}
+      .metric-card .subvalue {{
+        color: var(--brand1);
+        font-size: 1rem;
+        font-weight: 500;
+      }}
+      .summary-card {{
+        background: var(--surface-alt);
+        border-radius: 10px;
+        padding: 1.5rem;
+        border-top: 3px solid var(--brand2);
+        margin-bottom: 1.5rem;
+      }}
+      .comparison-badge {{
+        display: inline-block;
+        padding: 0.25rem 0.75rem;
+        border-radius: 20px;
+        font-size: 0.8rem;
+        font-weight: 600;
+        margin-right: 0.5rem;
+        margin-bottom: 0.5rem;
+      }}
+      .comparison-badge.up {{
+        background: rgba(16, 185, 129, 0.15);
+        color: #10B981;
+      }}
+      .comparison-badge.down {{
+        background: rgba(239, 68, 68, 0.15);
+        color: #EF4444;
+      }}
+      .comparison-badge.neutral {{
+        background: rgba(156, 163, 175, 0.15);
+        color: #9CA3AF;
       }}
     </style>
     """,
@@ -232,6 +287,7 @@ DISCIPLINE_SWATCH = {
 }
 
 GRID_KEY = "grid_df"
+SAVED_PROJECTS_KEY = "saved_projects"
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Helpers (robust parsing + matching)
@@ -647,6 +703,10 @@ if GRID_KEY not in st.session_state:
             )
     st.session_state[GRID_KEY] = pd.DataFrame(rows)
 
+# Initialize saved projects
+if SAVED_PROJECTS_KEY not in st.session_state:
+    st.session_state[SAVED_PROJECTS_KEY] = []
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Calculations
 # ──────────────────────────────────────────────────────────────────────────────
@@ -742,6 +802,79 @@ def compute_totals(df_out: pd.DataFrame, currency: str):
             **{f"Total Price ({currency})": (f"Total Cost ({currency})", "sum")},
         )
     return total_manhour, avg_rate, total_by_average, total_exact, totals
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Project Saving/Loading for Comparison
+# ──────────────────────────────────────────────────────────────────────────────
+def save_current_project():
+    """Save current project configuration and results for later comparison"""
+    type_of_schedule = st.session_state["type_of_schedule"]
+    rate_source = st.session_state["rate_source"]
+    currency = currency_for(type_of_schedule)
+    
+    df_out = compute_line_items(st.session_state[GRID_KEY], currency, rate_source, type_of_schedule)
+    total_manhour, avg_rate, total_by_average, total_exact, totals = compute_totals(df_out, currency)
+    
+    project_data = {
+        "id": datetime.now().strftime("%Y%m%d_%H%M%S"),
+        "name": st.session_state["project_title"] or f"Project_{datetime.now().strftime('%Y%m%d_%H%M')}",
+        "timestamp": datetime.now().isoformat(),
+        "project_title": st.session_state["project_title"],
+        "type_of_package": st.session_state["type_of_package"],
+        "type_of_schedule": type_of_schedule,
+        "rate_source": rate_source,
+        "currency": currency,
+        "total_manhour": total_manhour,
+        "avg_rate": avg_rate,
+        "total_by_average": total_by_average,
+        "total_exact": total_exact,
+        "totals": totals.to_dict('records'),
+        "line_items": df_out.to_dict('records'),
+        "personnel_count": len(st.session_state[GRID_KEY]),
+        "disciplines_used": st.session_state[GRID_KEY]["Discipline"].nunique()
+    }
+    
+    # Add to saved projects
+    st.session_state[SAVED_PROJECTS_KEY].append(project_data)
+    return project_data
+
+
+def compare_projects(project1, project2):
+    """Compare two projects and return comparison metrics"""
+    comparison = {
+        "manhour_diff": project2["total_manhour"] - project1["total_manhour"],
+        "manhour_pct": ((project2["total_manhour"] - project1["total_manhour"]) / project1["total_manhour"] * 100) if project1["total_manhour"] > 0 else 0,
+        "cost_diff": project2["total_exact"] - project1["total_exact"],
+        "cost_pct": ((project2["total_exact"] - project1["total_exact"]) / project1["total_exact"] * 100) if project1["total_exact"] > 0 else 0,
+        "avg_rate_diff": project2["avg_rate"] - project1["avg_rate"],
+        "avg_rate_pct": ((project2["avg_rate"] - project1["avg_rate"]) / project1["avg_rate"] * 100) if project1["avg_rate"] > 0 else 0,
+    }
+    
+    # Discipline-wise comparison
+    df1 = pd.DataFrame(project1["totals"])
+    df2 = pd.DataFrame(project2["totals"])
+    
+    # Merge for comparison
+    if not df1.empty and not df2.empty:
+        merged = pd.merge(
+            df1[["Discipline", "Manhour", f"Total Price ({project1['currency']})"]],
+            df2[["Discipline", "Manhour", f"Total Price ({project2['currency']})"]],
+            on="Discipline",
+            how="outer",
+            suffixes=("_1", "_2")
+        )
+        merged = merged.fillna(0)
+        
+        # Calculate differences
+        merged["Manhour_Diff"] = merged["Manhour_2"] - merged["Manhour_1"]
+        merged["Cost_Diff"] = merged[f"Total Price ({project2['currency']})_2"] - merged[f"Total Price ({project1['currency']})_1"]
+        
+        comparison["discipline_comparison"] = merged.to_dict('records')
+    else:
+        comparison["discipline_comparison"] = []
+    
+    return comparison
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -978,24 +1111,49 @@ def to_excel_bytes(main_meta: pd.DataFrame, totals: pd.DataFrame, lines: pd.Data
 # Navigation helpers
 # ──────────────────────────────────────────────────────────────────────────────
 def stepper(active: str):
+    steps = [("MAIN", "Main Page"), ("TABLE", "Personnel Table"), ("TOTALS", "Totals & Line Items"), ("SUMMARY", "Summary & Download"), ("COMPARE", "Compare Projects")]
+    
     st.markdown(
         f"""
     <style>
-      .mec-steps {{ margin: 8px 0 12px; }}
-      .mec-step {{
-        display:inline-block; padding:6px 10px; margin-right:6px;
-        border-radius:10px; background:#E5E7EB; color:#111827; font-weight:600; font-size:13px;
+      .mec-steps {{
+        margin: 8px 0 24px;
+        display: flex;
+        gap: 4px;
+        flex-wrap: wrap;
       }}
-      .mec-step.active {{ background: var(--brand1); color:#fff; }}
+      .mec-step {{
+        flex: 1;
+        min-width: 120px;
+        text-align: center;
+        padding: 10px 12px;
+        border-radius: 8px;
+        background: rgba(156, 163, 175, 0.1);
+        color: var(--text-muted);
+        font-weight: 600;
+        font-size: 13px;
+        transition: all 0.2s ease;
+        border: 1px solid transparent;
+      }}
+      .mec-step.active {{
+        background: var(--brand1);
+        color: #fff;
+        border-color: var(--brand1);
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+      }}
+      .mec-step:hover:not(.active) {{
+        background: rgba(156, 163, 175, 0.2);
+        border-color: rgba(156, 163, 175, 0.3);
+      }}
     </style>
     """,
         unsafe_allow_html=True,
     )
-    steps = [("MAIN", "Main Page"), ("TABLE", "Personnel Table"), ("TOTALS", "Totals & Line Items"), ("SUMMARY", "Summary & Download")]
+    
     html = '<div class="mec-steps">'
     for key, label in steps:
         cls = "mec-step active" if key == active else "mec-step"
-        html += f"<span class='{cls}'>{label}</span>"
+        html += f"<div class='{cls}'>{label}</div>"
     html += "</div>"
     st.markdown(html, unsafe_allow_html=True)
 
@@ -1030,14 +1188,18 @@ def reset_grid():
 def render_main():
     stepper("MAIN")
     st.markdown(
-        """
-# MEC TOOL
-""",
+        f"""
+    <h1 style="color: var(--brand1); margin-bottom: 0.5rem;">MEC TOOL</h1>
+    <p style="color: var(--text-muted); font-size: 1.1rem; margin-bottom: 2rem;">
+      Major Engineering Contract Tool for CE Upstream
+    </p>
+    """,
         unsafe_allow_html=True,
     )
-    st.caption(f"Workbook: {st.session_state.get('file_label','(loaded)')}")
+    
+    st.caption(f"📄 Workbook: {st.session_state.get('file_label','(loaded)')}")
 
-    st.markdown("<hr/>", unsafe_allow_html=True)
+    st.markdown("<hr style='margin: 2rem 0;'/>", unsafe_allow_html=True)
     st.header("Main Page")
 
     mp1, mp2 = st.columns(2)
@@ -1046,16 +1208,27 @@ def render_main():
             "Project Title",
             value=st.session_state["project_title"],
             placeholder="e.g., PROJECT A",
+            help="Enter the project title for identification"
         )
         st.session_state["cost_engineer"] = st.text_input(
-            "Cost Engineer", value=st.session_state["cost_engineer"], placeholder="Your name"
+            "Cost Engineer", 
+            value=st.session_state["cost_engineer"], 
+            placeholder="Your name",
+            help="Name of the cost engineer responsible"
         )
         st.session_state["tp_specialist"] = st.text_input(
-            "TP/Specialist", value=st.session_state["tp_specialist"], placeholder="TP in charge"
+            "TP/Specialist", 
+            value=st.session_state["tp_specialist"], 
+            placeholder="TP in charge",
+            help="Technical Professional or Specialist in charge"
         )
 
     with mp2:
-        st.session_state["project_date"] = st.date_input("Date", value=st.session_state["project_date"])
+        st.session_state["project_date"] = st.date_input(
+            "Date", 
+            value=st.session_state["project_date"],
+            help="Project date"
+        )
         st.session_state["type_of_package"] = st.selectbox(
             "Type of Package",
             package_opts,
@@ -1065,6 +1238,7 @@ def render_main():
                 if st.session_state["type_of_package"] in package_opts
                 else 0,
             ),
+            help="Select the package type (U1/U2)"
         )
         st.session_state["type_of_schedule"] = st.selectbox(
             "Type of Schedule (from Data sheet)",
@@ -1077,6 +1251,7 @@ def render_main():
                 if st.session_state["type_of_schedule"] in schedule_opts
                 else 0,
             ),
+            help="Select the schedule type (A/B/C/D)"
         )
 
     rs1, rs2 = st.columns([1, 2])
@@ -1087,13 +1262,21 @@ def render_main():
             "Rate Source", RATE_SOURCES, index=RATE_SOURCES.index(default_rate), horizontal=True
         )
     with rs2:
-        st.metric("Hours per Month (constant)", f"{HOURS_PER_MONTH:,.0f} hrs")
-        st.caption("Hours = Weightage × 176 × Duration (months)")
+        st.markdown(
+            f"""
+            <div class="metric-card">
+                <h3>Hours per Month (constant)</h3>
+                <div class="value">{HOURS_PER_MONTH:,.0f} hrs</div>
+                <div class="subvalue">Hours = Weightage × 176 × Duration</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
     st.markdown("<br/>", unsafe_allow_html=True)
     c1, c2 = st.columns([1, 1])
     with c1:
-        if st.button("➡️ Go to Personnel Table", use_container_width=True):
+        if st.button("➡️ Go to Personnel Table", use_container_width=True, type="primary"):
             st.session_state["page"] = "TABLE"
             do_rerun()
     with c2:
@@ -1288,11 +1471,58 @@ function(params) {
         total_exact = 0.0
 
     st.header("Results")
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Total Manhour", f"{total_manhour:,.0f}")
-    c2.metric("Avg Unit Rate", f"{avg_rate:,.2f} {currency}")
-    c3.metric("Method A — Avg × MH", f"{total_by_average:,.2f} {currency}")
-    c4.metric("Method B — Exact", f"{total_exact:,.2f} {currency}")
+    
+    # Improved metrics display
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.markdown(
+            f"""
+            <div class="metric-card">
+                <h3>Total Manhour</h3>
+                <div class="value">{total_manhour:,.0f}</div>
+                <div class="subvalue">person-hours</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+    
+    with col2:
+        st.markdown(
+            f"""
+            <div class="metric-card">
+                <h3>Average Unit Rate</h3>
+                <div class="value">{avg_rate:,.2f}</div>
+                <div class="subvalue">{currency}/hour</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+    
+    with col3:
+        st.markdown(
+            f"""
+            <div class="metric-card">
+                <h3>Method A — Avg × MH</h3>
+                <div class="value">{total_by_average:,.2f}</div>
+                <div class="subvalue">{currency}</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+    
+    with col4:
+        st.markdown(
+            f"""
+            <div class="metric-card">
+                <h3>Method B — Exact</h3>
+                <div class="value">{total_exact:,.2f}</div>
+                <div class="subvalue">{currency}</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+    
     st.caption("Method A: average of non-zero unit rates × total manhour. Method B: exact sum of line items.")
 
     st.markdown("<br/>", unsafe_allow_html=True)
@@ -1302,7 +1532,7 @@ function(params) {
             st.session_state["page"] = "MAIN"
             do_rerun()
     with c4:
-        if st.button("➡️ Go to Totals & Line Items", use_container_width=True):
+        if st.button("➡️ Go to Totals & Line Items", use_container_width=True, type="primary"):
             st.session_state["page"] = "TOTALS"
             do_rerun()
 
@@ -1314,37 +1544,158 @@ def render_totals():
     currency = currency_for(type_of_schedule)
 
     df_out = compute_line_items(st.session_state[GRID_KEY], currency, rate_source, type_of_schedule)
-    _, _, _, _, totals = compute_totals(df_out, currency)
+    total_manhour, avg_rate, total_by_average, total_exact, totals = compute_totals(df_out, currency)
 
+    # Summary metrics at top
+    st.markdown(
+        f"""
+        <div class="summary-card">
+            <h2 style="color: var(--brand1); margin-top: 0;">Project Summary</h2>
+            <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 1.5rem;">
+                <div>
+                    <h3 style="color: var(--text-muted); margin-bottom: 0.5rem; font-size: 0.9rem;">Total Cost ({currency})</h3>
+                    <div style="font-size: 2.2rem; font-weight: 700; color: var(--text);">{total_exact:,.2f}</div>
+                </div>
+                <div>
+                    <h3 style="color: var(--text-muted); margin-bottom: 0.5rem; font-size: 0.9rem;">Total Manhours</h3>
+                    <div style="font-size: 2.2rem; font-weight: 700; color: var(--text);">{total_manhour:,.0f}</div>
+                </div>
+                <div>
+                    <h3 style="color: var(--text-muted); margin-bottom: 0.5rem; font-size: 0.9rem;">Average Rate</h3>
+                    <div style="font-size: 1.5rem; font-weight: 600; color: var(--brand2);">{avg_rate:,.2f} {currency}/hour</div>
+                </div>
+                <div>
+                    <h3 style="color: var(--text-muted); margin-bottom: 0.5rem; font-size: 0.9rem;">Disciplines</h3>
+                    <div style="font-size: 1.5rem; font-weight: 600; color: var(--brand2);">{totals.shape[0]}</div>
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    # Visualizations
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if not totals.empty:
+            # Bar chart for totals by discipline
+            fig = px.bar(
+                totals.sort_values(f"Total Price ({currency})", ascending=True),
+                y="Discipline",
+                x=f"Total Price ({currency})",
+                orientation='h',
+                color="Discipline",
+                color_discrete_map={d: f"#{DISCIPLINE_COLORS.get(d, 'D1D5DB')}" for d in totals["Discipline"]},
+                title=f"Cost by Discipline ({currency})",
+                height=400
+            )
+            fig.update_layout(
+                showlegend=False,
+                plot_bgcolor='rgba(0,0,0,0)',
+                paper_bgcolor='rgba(0,0,0,0)',
+                font=dict(size=12),
+                margin=dict(l=10, r=10, t=40, b=10),
+                xaxis=dict(
+                    title=f"Total Price ({currency})",
+                    tickformat=",.0f",
+                    gridcolor='rgba(0,0,0,0.1)'
+                ),
+                yaxis=dict(
+                    title=None,
+                    categoryorder='total ascending'
+                )
+            )
+            st.plotly_chart(fig, use_container_width=True)
+    
+    with col2:
+        if not totals.empty and totals.shape[0] > 1:
+            # Donut chart for cost distribution
+            fig = px.pie(
+                totals,
+                values=f"Total Price ({currency})",
+                names="Discipline",
+                hole=0.4,
+                title="Cost Distribution by Discipline",
+                height=400,
+                color="Discipline",
+                color_discrete_map={d: f"#{DISCIPLINE_COLORS.get(d, 'D1D5DB')}" for d in totals["Discipline"]}
+            )
+            fig.update_traces(
+                textposition='inside',
+                textinfo='percent+label',
+                hovertemplate="<b>%{label}</b><br>%{value:,.0f} " + currency + "<br>%{percent}"
+            )
+            fig.update_layout(
+                showlegend=False,
+                plot_bgcolor='rgba(0,0,0,0)',
+                paper_bgcolor='rgba(0,0,0,0)',
+                font=dict(size=12),
+                margin=dict(l=10, r=10, t=40, b=10)
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+    # Detailed totals table
     st.subheader("Totals by Discipline")
-    st.dataframe(
-        totals,
-        use_container_width=True,
-        column_config={
-            "Manhour": st.column_config.NumberColumn("Manhour", format="%.0f"),
-            f"Total Price ({currency})": st.column_config.NumberColumn(f"Total Price ({currency})", format=f"{currency} %.2f"),
-        },
-    )
-
+    
+    if not totals.empty:
+        # Format the totals for display
+        display_totals = totals.copy()
+        display_totals["Manhour"] = display_totals["Manhour"].apply(lambda x: f"{x:,.0f}")
+        display_totals[f"Total Price ({currency})"] = display_totals[f"Total Price ({currency})"].apply(lambda x: f"{x:,.2f}")
+        
+        st.dataframe(
+            display_totals,
+            use_container_width=True,
+            column_config={
+                "Discipline": st.column_config.TextColumn("Discipline", width="medium"),
+                "Manhour": st.column_config.TextColumn("Manhour", width="small"),
+                f"Total Price ({currency})": st.column_config.TextColumn(f"Total Price ({currency})", width="medium"),
+            },
+            hide_index=True
+        )
+    
+    # Line items table
     st.subheader("Line Items")
-    st.dataframe(
-        df_out,
-        use_container_width=True,
-        column_config={
-            f"Unit Rate ({currency})": st.column_config.NumberColumn(f"Unit Rate ({currency})", format=f"{currency} %.2f"),
-            "Total Hours": st.column_config.NumberColumn("Total Hours", format="%.2f"),
-            f"Total Cost ({currency})": st.column_config.NumberColumn(f"Total Cost ({currency})", format=f"{currency} %.2f"),
-        },
-    )
+    
+    if not df_out.empty:
+        # Format line items for display
+        display_line_items = df_out.copy()
+        display_line_items[f"Unit Rate ({currency})"] = display_line_items[f"Unit Rate ({currency})"].apply(lambda x: f"{x:,.2f}")
+        display_line_items["Total Hours"] = display_line_items["Total Hours"].apply(lambda x: f"{x:,.2f}")
+        display_line_items[f"Total Cost ({currency})"] = display_line_items[f"Total Cost ({currency})"].apply(lambda x: f"{x:,.2f}")
+        
+        st.dataframe(
+            display_line_items,
+            use_container_width=True,
+            column_config={
+                "Discipline": st.column_config.TextColumn("Discipline", width="small"),
+                "Personnel": st.column_config.TextColumn("Personnel", width="medium"),
+                "Category": st.column_config.TextColumn("Category", width="small"),
+                "Type of Unit Rate": st.column_config.TextColumn("Rate Type", width="small"),
+                "Rate Source": st.column_config.TextColumn("Source", width="small"),
+                f"Unit Rate ({currency})": st.column_config.TextColumn(f"Rate ({currency})", width="small"),
+                "Weightage (FTE)": st.column_config.NumberColumn("Weightage", format="%.1f", width="small"),
+                "Duration (months)": st.column_config.NumberColumn("Duration", format="%d", width="small"),
+                "Total Hours": st.column_config.TextColumn("Hours", width="small"),
+                f"Total Cost ({currency})": st.column_config.TextColumn(f"Cost ({currency})", width="medium"),
+            },
+            hide_index=True
+        )
 
     st.markdown("<br/>", unsafe_allow_html=True)
-    c1, c2 = st.columns([1, 1])
+    c1, c2, c3 = st.columns([1, 1, 1])
     with c1:
         if st.button("⬅️ Back to Personnel Table", use_container_width=True):
             st.session_state["page"] = "TABLE"
             do_rerun()
     with c2:
-        if st.button("➡️ Go to Summary & Download", use_container_width=True):
+        if st.button("💾 Save for Comparison", use_container_width=True):
+            saved_project = save_current_project()
+            st.success(f"Project '{saved_project['name']}' saved for comparison!")
+            do_rerun()
+    with c3:
+        if st.button("➡️ Go to Summary & Download", use_container_width=True, type="primary"):
             st.session_state["page"] = "SUMMARY"
             do_rerun()
 
@@ -1454,6 +1805,7 @@ def render_summary():
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             type="primary",
             help="Main Page, Working Page (tinted & subtotals), and Summary — styled & currency-aware",
+            use_container_width=True
         )
     except TypeError:
         st.download_button(
@@ -1462,12 +1814,274 @@ def render_summary():
             file_name="MEC_TOOL_Output.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             help="Main Page, Working Page (tinted & subtotals), and Summary — styled & currency-aware",
+            use_container_width=True
         )
 
-    c1, c2 = st.columns([1, 1])
+    c1, c2, c3 = st.columns([1, 1, 1])
     with c1:
         if st.button("⬅️ Back to Totals", use_container_width=True):
             st.session_state["page"] = "TOTALS"
+            do_rerun()
+    with c2:
+        if st.button("💾 Save for Comparison", use_container_width=True):
+            saved_project = save_current_project()
+            st.success(f"Project '{saved_project['name']}' saved for comparison!")
+            do_rerun()
+    with c3:
+        if st.button("🔁 Back to Main Page", use_container_width=True):
+            st.session_state["page"] = "MAIN"
+            do_rerun()
+
+
+def render_compare():
+    stepper("COMPARE")
+    
+    st.markdown(
+        f"""
+        <h1 style="color: var(--brand1); margin-bottom: 0.5rem;">Project Comparison</h1>
+        <p style="color: var(--text-muted); font-size: 1.1rem; margin-bottom: 2rem;">
+          Compare saved projects and analyze differences
+        </p>
+        """,
+        unsafe_allow_html=True
+    )
+    
+    saved_projects = st.session_state.get(SAVED_PROJECTS_KEY, [])
+    
+    if not saved_projects:
+        st.info("No projects saved yet. Save projects from the Totals or Summary page to compare them.")
+        st.markdown("<br/>", unsafe_allow_html=True)
+        c1, c2 = st.columns([1, 1])
+        with c1:
+            if st.button("⬅️ Back to Summary", use_container_width=True):
+                st.session_state["page"] = "SUMMARY"
+                do_rerun()
+        with c2:
+            if st.button("🔁 Back to Main Page", use_container_width=True):
+                st.session_state["page"] = "MAIN"
+                do_rerun()
+        return
+    
+    # Project selection
+    st.subheader("Select Projects to Compare")
+    
+    project_names = [p["name"] for p in saved_projects]
+    project_display = [f"{p['name']} ({p['type_of_schedule']}, {p['currency']})" for p in saved_projects]
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        selected_idx_1 = st.selectbox(
+            "First Project",
+            range(len(saved_projects)),
+            format_func=lambda i: project_display[i],
+            key="compare_1"
+        )
+    
+    with col2:
+        selected_idx_2 = st.selectbox(
+            "Second Project",
+            range(len(saved_projects)),
+            format_func=lambda i: project_display[i],
+            index=min(1, len(saved_projects)-1) if len(saved_projects) > 1 else 0,
+            key="compare_2"
+        )
+    
+    if selected_idx_1 == selected_idx_2:
+        st.warning("Please select two different projects for comparison.")
+    else:
+        project1 = saved_projects[selected_idx_1]
+        project2 = saved_projects[selected_idx_2]
+        
+        comparison = compare_projects(project1, project2)
+        
+        # Summary comparison
+        st.markdown("<br/>", unsafe_allow_html=True)
+        st.subheader("Comparison Summary")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            manhour_change = comparison["manhour_pct"]
+            manhour_badge = "up" if manhour_change > 5 else "down" if manhour_change < -5 else "neutral"
+            st.markdown(
+                f"""
+                <div class="metric-card">
+                    <h3>Manhour Change</h3>
+                    <div class="value">{comparison["manhour_diff"]:+,.0f}</div>
+                    <div class="subvalue">
+                        <span class="comparison-badge {manhour_badge}">
+                            {comparison["manhour_pct"]:+.1f}%
+                        </span>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+        
+        with col2:
+            cost_change = comparison["cost_pct"]
+            cost_badge = "up" if cost_change > 5 else "down" if cost_change < -5 else "neutral"
+            st.markdown(
+                f"""
+                <div class="metric-card">
+                    <h3>Cost Change</h3>
+                    <div class="value">{comparison["cost_diff"]:+,.2f} {project2['currency']}</div>
+                    <div class="subvalue">
+                        <span class="comparison-badge {cost_badge}">
+                            {comparison["cost_pct"]:+.1f}%
+                        </span>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+        
+        with col3:
+            rate_change = comparison["avg_rate_pct"]
+            rate_badge = "up" if rate_change > 5 else "down" if rate_change < -5 else "neutral"
+            st.markdown(
+                f"""
+                <div class="metric-card">
+                    <h3>Avg Rate Change</h3>
+                    <div class="value">{comparison["avg_rate_diff"]:+,.2f} {project2['currency']}/hr</div>
+                    <div class="subvalue">
+                        <span class="comparison-badge {rate_badge}">
+                            {comparison["avg_rate_pct"]:+.1f}%
+                        </span>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+        
+        # Detailed comparison table
+        st.subheader("Discipline-wise Comparison")
+        
+        if comparison["discipline_comparison"]:
+            comp_df = pd.DataFrame(comparison["discipline_comparison"])
+            
+            # Clean up column names
+            comp_df.columns = [col.replace(f"Total Price ({project1['currency']})_1", f"Cost_1 ({project1['currency']})")
+                              .replace(f"Total Price ({project2['currency']})_2", f"Cost_2 ({project2['currency']})")
+                              for col in comp_df.columns]
+            
+            # Calculate percentage changes
+            comp_df["Manhour_Change_Pct"] = ((comp_df["Manhour_2"] - comp_df["Manhour_1"]) / comp_df["Manhour_1"].replace(0, 1)) * 100
+            comp_df["Cost_Change_Pct"] = ((comp_df[f"Cost_2 ({project2['currency']})"] - comp_df[f"Cost_1 ({project1['currency']})"]) / 
+                                        comp_df[f"Cost_1 ({project1['currency']})"].replace(0, 1)) * 100
+            
+            # Format for display
+            display_df = comp_df[["Discipline", "Manhour_1", "Manhour_2", "Manhour_Diff", "Manhour_Change_Pct",
+                                 f"Cost_1 ({project1['currency']})", f"Cost_2 ({project2['currency']})", 
+                                 "Cost_Diff", "Cost_Change_Pct"]].copy()
+            
+            # Format numeric columns
+            for col in ["Manhour_1", "Manhour_2", "Manhour_Diff"]:
+                display_df[col] = display_df[col].apply(lambda x: f"{x:,.0f}")
+            
+            for col in [f"Cost_1 ({project1['currency']})", f"Cost_2 ({project2['currency']})", "Cost_Diff"]:
+                display_df[col] = display_df[col].apply(lambda x: f"{x:,.2f}")
+            
+            display_df["Manhour_Change_Pct"] = display_df["Manhour_Change_Pct"].apply(lambda x: f"{x:+.1f}%")
+            display_df["Cost_Change_Pct"] = display_df["Cost_Change_Pct"].apply(lambda x: f"{x:+.1f}%")
+            
+            st.dataframe(
+                display_df,
+                use_container_width=True,
+                column_config={
+                    "Discipline": st.column_config.TextColumn("Discipline", width="small"),
+                    "Manhour_1": st.column_config.TextColumn(f"{project1['name'][:10]}... MH", width="small"),
+                    "Manhour_2": st.column_config.TextColumn(f"{project2['name'][:10]}... MH", width="small"),
+                    "Manhour_Diff": st.column_config.TextColumn("MH Diff", width="small"),
+                    "Manhour_Change_Pct": st.column_config.TextColumn("MH %", width="small"),
+                    f"Cost_1 ({project1['currency']})": st.column_config.TextColumn(f"{project1['name'][:10]}... Cost", width="medium"),
+                    f"Cost_2 ({project2['currency']})": st.column_config.TextColumn(f"{project2['name'][:10]}... Cost", width="medium"),
+                    "Cost_Diff": st.column_config.TextColumn("Cost Diff", width="medium"),
+                    "Cost_Change_Pct": st.column_config.TextColumn("Cost %", width="small"),
+                },
+                hide_index=True
+            )
+        
+        # Visualization
+        st.subheader("Visual Comparison")
+        
+        if comparison["discipline_comparison"]:
+            comp_df = pd.DataFrame(comparison["discipline_comparison"])
+            
+            # Create comparison bar chart
+            fig = go.Figure()
+            
+            # Add bars for project 1
+            fig.add_trace(go.Bar(
+                name=project1['name'][:20],
+                y=comp_df['Discipline'],
+                x=comp_df[f'Total Price ({project1["currency"]})_1'],
+                orientation='h',
+                marker_color=BRAND1,
+                opacity=0.7
+            ))
+            
+            # Add bars for project 2
+            fig.add_trace(go.Bar(
+                name=project2['name'][:20],
+                y=comp_df['Discipline'],
+                x=comp_df[f'Total Price ({project2["currency"]})_2'],
+                orientation='h',
+                marker_color=BRAND2,
+                opacity=0.7
+            ))
+            
+            fig.update_layout(
+                barmode='group',
+                title=f"Cost Comparison by Discipline",
+                xaxis_title="Total Cost",
+                yaxis_title="Discipline",
+                height=max(400, len(comp_df) * 30),
+                plot_bgcolor='rgba(0,0,0,0)',
+                paper_bgcolor='rgba(0,0,0,0)',
+                font=dict(size=12),
+                margin=dict(l=10, r=10, t=40, b=10),
+                legend=dict(
+                    orientation="h",
+                    yanchor="bottom",
+                    y=1.02,
+                    xanchor="right",
+                    x=1
+                )
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+    
+    # Project management
+    st.markdown("<br/>", unsafe_allow_html=True)
+    st.subheader("Manage Saved Projects")
+    
+    if saved_projects:
+        # Display saved projects
+        for i, project in enumerate(saved_projects):
+            col1, col2, col3 = st.columns([3, 2, 1])
+            with col1:
+                st.write(f"**{project['name']}**")
+                st.caption(f"{project['type_of_schedule']} • {project['currency']} • {project['total_manhour']:,.0f} MH • {project['total_exact']:,.2f} {project['currency']}")
+            with col2:
+                st.caption(f"Saved: {datetime.fromisoformat(project['timestamp']).strftime('%Y-%m-%d %H:%M')}")
+            with col3:
+                if st.button("🗑️", key=f"delete_{i}", help="Delete project"):
+                    st.session_state[SAVED_PROJECTS_KEY].pop(i)
+                    st.success("Project deleted!")
+                    do_rerun()
+        
+        # Clear all button
+        if st.button("Clear All Saved Projects", type="secondary", use_container_width=True):
+            st.session_state[SAVED_PROJECTS_KEY] = []
+            st.success("All projects cleared!")
+            do_rerun()
+    
+    st.markdown("<br/>", unsafe_allow_html=True)
+    c1, c2 = st.columns([1, 1])
+    with c1:
+        if st.button("⬅️ Back to Summary", use_container_width=True):
+            st.session_state["page"] = "SUMMARY"
             do_rerun()
     with c2:
         if st.button("🔁 Back to Main Page", use_container_width=True):
@@ -1487,6 +2101,8 @@ elif page == "TOTALS":
     render_totals()
 elif page == "SUMMARY":
     render_summary()
+elif page == "COMPARE":
+    render_compare()
 else:
     st.session_state["page"] = "MAIN"
     do_rerun()
