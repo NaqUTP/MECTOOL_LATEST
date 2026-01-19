@@ -2,6 +2,7 @@
 # MEC TOOL – Streamlit app (CSV upload mode; no internal files in repo)
 # Author: Ahmad Naquib Syahmee Masror (Dev/Upstream)
 # Updated: 2025-12-17
+# ADDED: Project Comparison Feature
 
 import io
 import os
@@ -9,7 +10,8 @@ import re
 import json
 import warnings
 import hashlib
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
+from datetime import datetime
 
 import pandas as pd
 import streamlit as st
@@ -31,6 +33,8 @@ except Exception:
 # Plotly for visuals
 try:
     import plotly.express as px
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
 except Exception:
     st.error(
         "Missing dependency plotly.\n\n"
@@ -95,6 +99,19 @@ def apply_theme(dark: bool, brand1: str, brand2: str, muted: str) -> None:
       }}
       .stDataFrame, .st-emotion-cache-oco5fk, .st-emotion-cache-1k2qj1w {{
         background: var(--surface-alt);
+      }}
+      .project-card {{
+        background: var(--surface-alt);
+        border-radius: 10px;
+        padding: 15px;
+        margin-bottom: 10px;
+        border-left: 4px solid var(--brand1);
+      }}
+      .comparison-metric {{
+        background: var(--surface);
+        border-radius: 8px;
+        padding: 10px;
+        text-align: center;
       }}
     </style>
     """,
@@ -227,6 +244,121 @@ DISCIPLINE_SWATCH = {
 }
 
 GRID_KEY = "grid_df"
+PROJECTS_KEY = "saved_projects"
+COMPARE_KEY = "compare_selection"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Project Management Functions
+# ──────────────────────────────────────────────────────────────────────────────
+def save_current_project(project_name: str = None) -> str:
+    """Save current project state to session state"""
+    if PROJECTS_KEY not in st.session_state:
+        st.session_state[PROJECTS_KEY] = {}
+    
+    if not project_name:
+        project_name = st.session_state.get("project_title", f"Project_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+    
+    # Create project snapshot
+    project_data = {
+        "id": hashlib.md5(f"{project_name}_{datetime.now().timestamp()}".encode()).hexdigest()[:8],
+        "name": project_name,
+        "timestamp": datetime.now().isoformat(),
+        "metadata": {
+            "project_title": st.session_state.get("project_title", ""),
+            "cost_engineer": st.session_state.get("cost_engineer", ""),
+            "tp_specialist": st.session_state.get("tp_specialist", ""),
+            "project_date": str(st.session_state.get("project_date", "")),
+            "type_of_package": st.session_state.get("type_of_package", ""),
+            "type_of_schedule": st.session_state.get("type_of_schedule", ""),
+            "rate_source": st.session_state.get("rate_source", ""),
+        },
+        "grid_data": st.session_state.get(GRID_KEY, pd.DataFrame()).to_dict(orient="records"),
+        "totals": None,
+        "line_items": None,
+        "currency": None,
+        "total_manhour": 0,
+        "avg_rate": 0,
+        "total_exact": 0,
+    }
+    
+    # Calculate current totals if possible
+    try:
+        currency = currency_for(project_data["metadata"]["type_of_schedule"])
+        df_out = compute_line_items(
+            pd.DataFrame(project_data["grid_data"]),
+            currency,
+            project_data["metadata"]["rate_source"],
+            project_data["metadata"]["type_of_schedule"]
+        )
+        total_manhour, avg_rate, total_by_average, total_exact, totals = compute_totals(df_out, currency)
+        
+        project_data.update({
+            "totals": totals.to_dict(orient="records") if not totals.empty else [],
+            "line_items": df_out.to_dict(orient="records") if not df_out.empty else [],
+            "currency": currency,
+            "total_manhour": float(total_manhour),
+            "avg_rate": float(avg_rate),
+            "total_by_average": float(total_by_average),
+            "total_exact": float(total_exact),
+        })
+    except Exception as e:
+        st.warning(f"Could not calculate totals for saving: {e}")
+    
+    # Save to session state
+    st.session_state[PROJECTS_KEY][project_data["id"]] = project_data
+    return project_data["id"]
+
+
+def load_project(project_id: str) -> bool:
+    """Load a saved project into current session"""
+    if PROJECTS_KEY not in st.session_state or project_id not in st.session_state[PROJECTS_KEY]:
+        return False
+    
+    project = st.session_state[PROJECTS_KEY][project_id]
+    
+    # Load metadata
+    for key, value in project["metadata"].items():
+        if key in st.session_state:
+            st.session_state[key] = value
+    
+    # Load grid data
+    if project["grid_data"]:
+        st.session_state[GRID_KEY] = pd.DataFrame(project["grid_data"])
+    
+    return True
+
+
+def delete_project(project_id: str):
+    """Delete a saved project"""
+    if PROJECTS_KEY in st.session_state and project_id in st.session_state[PROJECTS_KEY]:
+        del st.session_state[PROJECTS_KEY][project_id]
+        # Also remove from compare selection
+        if COMPARE_KEY in st.session_state and project_id in st.session_state[COMPARE_KEY]:
+            st.session_state[COMPARE_KEY].remove(project_id)
+
+
+def get_project_summary_df() -> pd.DataFrame:
+    """Get dataframe of all saved projects for display"""
+    if PROJECTS_KEY not in st.session_state or not st.session_state[PROJECTS_KEY]:
+        return pd.DataFrame()
+    
+    rows = []
+    for project_id, project in st.session_state[PROJECTS_KEY].items():
+        rows.append({
+            "ID": project_id,
+            "Project Name": project["name"],
+            "Date": project["metadata"]["project_date"],
+            "Schedule": project["metadata"]["type_of_schedule"],
+            "Package": project["metadata"]["type_of_package"],
+            "Currency": project.get("currency", ""),
+            "Total Manhour": project.get("total_manhour", 0),
+            "Avg Rate": project.get("avg_rate", 0),
+            "Total Cost": project.get("total_exact", 0),
+            "Saved": project["timestamp"][:10],
+        })
+    
+    return pd.DataFrame(rows)
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Helpers (robust parsing + matching)
@@ -391,11 +523,29 @@ with st.sidebar:
     up_data = st.file_uploader("Data.csv", type=["csv"], key="up_data")
     up_u1 = st.file_uploader("U1.csv", type=["csv"], key="up_u1")
     up_u2 = st.file_uploader("U2.csv", type=["csv"], key="up_u2")
+    
+    st.markdown("---")
+    st.subheader("Project Management")
+    
+    # Save current project
+    save_col1, save_col2 = st.columns([2, 1])
+    with save_col1:
+        save_name = st.text_input("Save as", value=st.session_state.get("project_title", ""), 
+                                 placeholder="Project name")
+    with save_col2:
+        if st.button("💾 Save", use_container_width=True):
+            if save_name.strip():
+                project_id = save_current_project(save_name.strip())
+                st.success(f"Saved: {save_name}")
+                st.session_state["current_project_id"] = project_id
+            else:
+                st.warning("Please enter a project name")
 
     if st.button("Reset app session", use_container_width=True):
         # Clear everything (safe reset)
         for k in list(st.session_state.keys()):
-            del st.session_state[k]
+            if k not in [PROJECTS_KEY, COMPARE_KEY]:  # Keep saved projects
+                del st.session_state[k]
         do_rerun()
 
 if not (up_data and up_u1 and up_u2):
@@ -426,7 +576,7 @@ except Exception as e:
     st.exception(e)
     st.stop()
 
-# “Working Page” is not used in CSV upload mode
+# "Working Page" is not used in CSV upload mode
 working = pd.DataFrame()
 base_rate_col = None
 
@@ -504,7 +654,7 @@ def get_rate(
             if not m.empty:
                 return _to_float_safe(get_col(m, col).iloc[0])
 
-    # CSV mode: no “working” fallback
+    # CSV mode: no "working" fallback
     return 0.0
 
 
@@ -519,6 +669,7 @@ st.session_state.setdefault("project_date", None)
 st.session_state.setdefault("type_of_package", package_opts[0] if package_opts else "U1")
 st.session_state.setdefault("type_of_schedule", schedule_opts[0] if schedule_opts else "Schedule A")
 st.session_state.setdefault("rate_source", RATE_SOURCES[0])
+st.session_state.setdefault(COMPARE_KEY, [])
 
 if GRID_KEY not in st.session_state:
     rows = []
@@ -896,7 +1047,8 @@ def stepper(active: str):
     """,
         unsafe_allow_html=True,
     )
-    steps = [("MAIN", "Main Page"), ("TABLE", "Personnel Table"), ("TOTALS", "Totals & Line Items"), ("SUMMARY", "Summary & Download")]
+    steps = [("MAIN", "Main Page"), ("TABLE", "Personnel Table"), ("TOTALS", "Totals & Line Items"), 
+             ("SUMMARY", "Summary & Download"), ("COMPARE", "Compare Projects")]
     html = '<div class="mec-steps">'
     for key, label in steps:
         cls = "mec-step active" if key == active else "mec-step"
@@ -930,7 +1082,334 @@ def reset_grid():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Page renderers
+# COMPARE PROJECTS PAGE
+# ──────────────────────────────────────────────────────────────────────────────
+def render_compare():
+    stepper("COMPARE")
+    st.header("📊 Project Comparison")
+    
+    # Get saved projects
+    projects_df = get_project_summary_df()
+    
+    if projects_df.empty:
+        st.info("No saved projects found. Save your current project from the Main Page or Summary Page to enable comparison.")
+        st.markdown("<br/>", unsafe_allow_html=True)
+        if st.button("⬅️ Back to Main Page", use_container_width=True):
+            st.session_state["page"] = "MAIN"
+            do_rerun()
+        return
+    
+    st.subheader("Saved Projects")
+    
+    # Display saved projects with checkboxes for comparison
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.dataframe(
+            projects_df.drop(columns=["ID"]),
+            use_container_width=True,
+            column_config={
+                "Total Manhour": st.column_config.NumberColumn(format="%.0f"),
+                "Avg Rate": st.column_config.NumberColumn(format="%.2f"),
+                "Total Cost": st.column_config.NumberColumn(format="%.0f"),
+            }
+        )
+    
+    with col2:
+        st.markdown("### Compare Selection")
+        # Checkboxes for project selection
+        for _, row in projects_df.iterrows():
+            is_selected = st.checkbox(
+                f"{row['Project Name']} ({row['Currency']})",
+                value=row['ID'] in st.session_state[COMPARE_KEY],
+                key=f"compare_{row['ID']}"
+            )
+            if is_selected and row['ID'] not in st.session_state[COMPARE_KEY]:
+                st.session_state[COMPARE_KEY].append(row['ID'])
+            elif not is_selected and row['ID'] in st.session_state[COMPARE_KEY]:
+                st.session_state[COMPARE_KEY].remove(row['ID'])
+        
+        # Clear selection button
+        if st.button("Clear Selection", use_container_width=True):
+            st.session_state[COMPARE_KEY] = []
+            do_rerun()
+        
+        # Load selected project button
+        if st.session_state[COMPARE_KEY]:
+            selected_id = st.selectbox(
+                "Load project to edit:",
+                options=st.session_state[COMPARE_KEY],
+                format_func=lambda x: st.session_state[PROJECTS_KEY][x]["name"]
+            )
+            if st.button("📂 Load Selected", use_container_width=True):
+                if load_project(selected_id):
+                    st.success(f"Loaded: {st.session_state[PROJECTS_KEY][selected_id]['name']}")
+                    st.session_state["page"] = "MAIN"
+                    do_rerun()
+    
+    # Comparison analysis (only if at least 2 projects selected)
+    if len(st.session_state[COMPARE_KEY]) >= 2:
+        st.markdown("---")
+        st.subheader("📈 Comparison Analysis")
+        
+        # Get selected projects data
+        selected_projects = []
+        for project_id in st.session_state[COMPARE_KEY]:
+            if project_id in st.session_state.get(PROJECTS_KEY, {}):
+                selected_projects.append(st.session_state[PROJECTS_KEY][project_id])
+        
+        if len(selected_projects) >= 2:
+            # 1. High-level metrics comparison
+            st.markdown("#### Key Metrics Comparison")
+            
+            metrics_data = []
+            for project in selected_projects:
+                metrics_data.append({
+                    "Project": project["name"],
+                    "Currency": project.get("currency", "N/A"),
+                    "Total Manhour": project.get("total_manhour", 0),
+                    "Avg Rate": project.get("avg_rate", 0),
+                    "Total Cost": project.get("total_exact", 0),
+                    "Cost per Manhour": project.get("total_exact", 0) / project.get("total_manhour", 1) if project.get("total_manhour", 0) > 0 else 0
+                })
+            
+            metrics_df = pd.DataFrame(metrics_data)
+            
+            # Display metrics in columns
+            cols = st.columns(len(selected_projects))
+            for idx, (col, project) in enumerate(zip(cols, selected_projects)):
+                with col:
+                    st.markdown(f'<div class="project-card">', unsafe_allow_html=True)
+                    st.markdown(f"**{project['name']}**")
+                    st.markdown(f"*{project['metadata']['type_of_schedule']}*")
+                    st.metric("Total Cost", f"{project.get('total_exact', 0):,.0f} {project.get('currency', '')}")
+                    st.metric("Manhours", f"{project.get('total_manhour', 0):,.0f}")
+                    st.metric("Avg Rate", f"{project.get('avg_rate', 0):,.2f} {project.get('currency', '')}")
+                    st.markdown('</div>', unsafe_allow_html=True)
+            
+            # 2. Visual Comparison Charts
+            st.markdown("#### Visual Comparison")
+            
+            tab1, tab2, tab3, tab4 = st.tabs(["📊 Cost Comparison", "⏱️ Manhour Comparison", "💰 Rate Analysis", "📋 Detailed View"])
+            
+            with tab1:
+                # Bar chart for total costs
+                fig_cost = go.Figure(data=[
+                    go.Bar(
+                        name='Total Cost',
+                        x=metrics_df['Project'],
+                        y=metrics_df['Total Cost'],
+                        text=[f"{v:,.0f} {c}" for v, c in zip(metrics_df['Total Cost'], metrics_df['Currency'])],
+                        textposition='auto',
+                        marker_color=BRAND1
+                    )
+                ])
+                fig_cost.update_layout(
+                    title='Total Cost Comparison',
+                    xaxis_title='Project',
+                    yaxis_title='Total Cost',
+                    showlegend=False,
+                    template='plotly_white'
+                )
+                st.plotly_chart(fig_cost, use_container_width=True)
+            
+            with tab2:
+                # Bar chart for manhours
+                fig_mh = go.Figure(data=[
+                    go.Bar(
+                        name='Total Manhour',
+                        x=metrics_df['Project'],
+                        y=metrics_df['Total Manhour'],
+                        text=[f"{v:,.0f}" for v in metrics_df['Total Manhour']],
+                        textposition='auto',
+                        marker_color=BRAND2
+                    )
+                ])
+                fig_mh.update_layout(
+                    title='Total Manhour Comparison',
+                    xaxis_title='Project',
+                    yaxis_title='Total Manhour',
+                    showlegend=False,
+                    template='plotly_white'
+                )
+                st.plotly_chart(fig_mh, use_container_width=True)
+            
+            with tab3:
+                # Scatter plot: Cost vs Manhour
+                fig_scatter = go.Figure()
+                for idx, row in metrics_df.iterrows():
+                    fig_scatter.add_trace(go.Scatter(
+                        x=[row['Total Manhour']],
+                        y=[row['Total Cost']],
+                        mode='markers+text',
+                        name=row['Project'],
+                        text=[row['Project']],
+                        textposition="top center",
+                        marker=dict(size=15, color=BRAND1),
+                        hovertemplate=f"Project: {row['Project']}<br>"
+                                    f"Manhour: {row['Total Manhour']:,.0f}<br>"
+                                    f"Cost: {row['Total Cost']:,.0f} {row['Currency']}<br>"
+                                    f"Cost/Manhour: {row['Cost per Manhour']:,.2f}"
+                    ))
+                
+                fig_scatter.update_layout(
+                    title='Cost vs Manhour (Bubble Size = Avg Rate)',
+                    xaxis_title='Total Manhour',
+                    yaxis_title=f'Total Cost',
+                    template='plotly_white',
+                    showlegend=True
+                )
+                st.plotly_chart(fig_scatter, use_container_width=True)
+            
+            with tab4:
+                # Detailed comparison table
+                st.dataframe(
+                    metrics_df,
+                    use_container_width=True,
+                    column_config={
+                        "Project": st.column_config.TextColumn(width="medium"),
+                        "Currency": st.column_config.TextColumn(width="small"),
+                        "Total Manhour": st.column_config.NumberColumn(format="%.0f"),
+                        "Avg Rate": st.column_config.NumberColumn(format="%.2f"),
+                        "Total Cost": st.column_config.NumberColumn(format="%.0f"),
+                        "Cost per Manhour": st.column_config.NumberColumn(format="%.2f"),
+                    }
+                )
+            
+            # 3. Rate Comparison by Discipline (if available)
+            st.markdown("#### Rate Comparison by Discipline")
+            
+            # Collect discipline-level data
+            discipline_data = []
+            for project in selected_projects:
+                if project.get("line_items"):
+                    df_items = pd.DataFrame(project["line_items"])
+                    # Get unique unit rate column name
+                    rate_col = next((c for c in df_items.columns if "Unit Rate" in c), None)
+                    if rate_col:
+                        for disc in df_items["Discipline"].unique():
+                            disc_rates = df_items[df_items["Discipline"] == disc][rate_col]
+                            if not disc_rates.empty:
+                                discipline_data.append({
+                                    "Project": project["name"],
+                                    "Discipline": disc,
+                                    "Avg Rate": disc_rates.mean(),
+                                    "Currency": project.get("currency", "")
+                                })
+            
+            if discipline_data:
+                disc_df = pd.DataFrame(discipline_data)
+                
+                # Pivot for heatmap
+                pivot_df = disc_df.pivot(index="Discipline", columns="Project", values="Avg Rate")
+                
+                # Create heatmap
+                fig_heatmap = go.Figure(data=go.Heatmap(
+                    z=pivot_df.values,
+                    x=pivot_df.columns,
+                    y=pivot_df.index,
+                    colorscale='Viridis',
+                    text=[[f"{v:,.0f}" for v in row] for row in pivot_df.values],
+                    texttemplate="%{text}",
+                    textfont={"size": 10}
+                ))
+                
+                fig_heatmap.update_layout(
+                    title='Average Rate by Discipline (Heatmap)',
+                    xaxis_title='Project',
+                    yaxis_title='Discipline',
+                    height=max(400, len(pivot_df) * 30)
+                )
+                st.plotly_chart(fig_heatmap, use_container_width=True)
+                
+                # Bar chart comparison for each discipline
+                selected_discipline = st.selectbox(
+                    "Select Discipline for detailed rate comparison:",
+                    options=sorted(disc_df["Discipline"].unique())
+                )
+                
+                if selected_discipline:
+                    disc_comparison = disc_df[disc_df["Discipline"] == selected_discipline]
+                    fig_disc = go.Figure(data=[
+                        go.Bar(
+                            x=disc_comparison["Project"],
+                            y=disc_comparison["Avg Rate"],
+                            text=[f"{v:,.0f} {c}" for v, c in zip(disc_comparison["Avg Rate"], disc_comparison["Currency"])],
+                            textposition='auto',
+                            marker_color=BRAND1
+                        )
+                    ])
+                    fig_disc.update_layout(
+                        title=f'Average Rate for {selected_discipline}',
+                        xaxis_title='Project',
+                        yaxis_title='Average Rate',
+                        showlegend=False
+                    )
+                    st.plotly_chart(fig_disc, use_container_width=True)
+            
+            # 4. Export comparison report
+            st.markdown("#### Export Comparison Report")
+            
+            # Create comparison summary
+            comparison_summary = {
+                "comparison_date": datetime.now().isoformat(),
+                "projects_compared": [p["name"] for p in selected_projects],
+                "metrics_comparison": metrics_data,
+                "notes": "Generated by MEC TOOL Project Comparison"
+            }
+            
+            # Export options
+            col1, col2 = st.columns(2)
+            with col1:
+                # JSON export
+                json_str = json.dumps(comparison_summary, indent=2)
+                st.download_button(
+                    label="📥 Download JSON Report",
+                    data=json_str,
+                    file_name="project_comparison.json",
+                    mime="application/json",
+                    use_container_width=True
+                )
+            
+            with col2:
+                # CSV export of metrics
+                csv_data = metrics_df.to_csv(index=False)
+                st.download_button(
+                    label="📊 Download CSV Metrics",
+                    data=csv_data,
+                    file_name="project_metrics.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+    
+    elif len(st.session_state[COMPARE_KEY]) == 1:
+        st.info("Select at least 2 projects for comparison.")
+    
+    # Project management
+    st.markdown("---")
+    st.subheader("Project Management")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        if st.button("🗑️ Delete All Projects", use_container_width=True):
+            st.session_state[PROJECTS_KEY] = {}
+            st.session_state[COMPARE_KEY] = []
+            st.success("All projects deleted!")
+            do_rerun()
+    
+    with col2:
+        if st.button("⬅️ Back to Summary", use_container_width=True):
+            st.session_state["page"] = "SUMMARY"
+            do_rerun()
+    
+    with col3:
+        if st.button("🏠 Back to Main", use_container_width=True):
+            st.session_state["page"] = "MAIN"
+            do_rerun()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Page renderers (MAIN, TABLE, TOTALS, SUMMARY)
 # ──────────────────────────────────────────────────────────────────────────────
 def render_main():
     stepper("MAIN")
@@ -991,7 +1470,12 @@ def render_main():
         st.caption("Hours = Weightage × 176 × Duration (months)")
 
     st.markdown("<br/>", unsafe_allow_html=True)
-    c1, c2 = st.columns([1, 1])
+    
+    # Show saved projects count
+    if PROJECTS_KEY in st.session_state and st.session_state[PROJECTS_KEY]:
+        st.info(f"📁 You have {len(st.session_state[PROJECTS_KEY])} saved project(s). Go to Compare Projects page to analyze them.")
+    
+    c1, c2, c3 = st.columns([1, 1, 1])
     with c1:
         if st.button("➡️ Go to Personnel Table", use_container_width=True):
             st.session_state["page"] = "TABLE"
@@ -999,6 +1483,10 @@ def render_main():
     with c2:
         if st.button("↺ Reset Grid to Defaults", use_container_width=True):
             reset_grid()
+            do_rerun()
+    with c3:
+        if st.button("📊 Compare Projects", use_container_width=True):
+            st.session_state["page"] = "COMPARE"
             do_rerun()
 
 
@@ -1268,6 +1756,28 @@ def render_summary():
     st.subheader("Main Page (entered)")
     st.dataframe(main_meta, use_container_width=True)
 
+    # Save project button in summary
+    st.markdown("---")
+    col_save1, col_save2, col_save3 = st.columns([2, 1, 1])
+    with col_save1:
+        save_name = st.text_input(
+            "Save this project as:", 
+            value=st.session_state.get("project_title", ""),
+            placeholder="Enter project name"
+        )
+    with col_save2:
+        if st.button("💾 Save Project", use_container_width=True):
+            if save_name.strip():
+                project_id = save_current_project(save_name.strip())
+                st.success(f"Project '{save_name}' saved!")
+                st.session_state["current_project_id"] = project_id
+            else:
+                st.warning("Please enter a project name")
+    with col_save3:
+        if st.button("📊 Compare Projects", use_container_width=True):
+            st.session_state["page"] = "COMPARE"
+            do_rerun()
+
     # Visuals
     if not df_out.empty:
         discipline_color_map = {d: f"#{DISCIPLINE_COLORS.get(d, 'D1D5DB')}" for d in df_out["Discipline"].unique()}
@@ -1344,14 +1854,18 @@ def render_summary():
         help="Main Page, Working Page (tinted & subtotals), and Summary — styled & currency-aware",
     )
 
-    c1, c2 = st.columns([1, 1])
+    c1, c2, c3 = st.columns([1, 1, 1])
     with c1:
         if st.button("⬅️ Back to Totals", use_container_width=True):
             st.session_state["page"] = "TOTALS"
             do_rerun()
     with c2:
-        if st.button("🔁 Back to Main Page", use_container_width=True):
+        if st.button("🏠 Back to Main Page", use_container_width=True):
             st.session_state["page"] = "MAIN"
+            do_rerun()
+    with c3:
+        if st.button("📊 Compare Projects", use_container_width=True):
+            st.session_state["page"] = "COMPARE"
             do_rerun()
 
 
@@ -1367,6 +1881,8 @@ elif page == "TOTALS":
     render_totals()
 elif page == "SUMMARY":
     render_summary()
+elif page == "COMPARE":
+    render_compare()
 else:
     st.session_state["page"] = "MAIN"
     do_rerun()
