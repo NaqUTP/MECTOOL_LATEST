@@ -290,6 +290,17 @@ GRID_KEY = "grid_df"
 SAVED_PROJECTS_KEY = "saved_projects"
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Navigation Pages
+# ──────────────────────────────────────────────────────────────────────────────
+PAGES = {
+    "MAIN": "🏠 Main Page",
+    "TABLE": "👥 Personnel Table", 
+    "TOTALS": "📊 Totals & Line Items",
+    "SUMMARY": "📈 Summary & Download",
+    "COMPARE": "🔄 Compare Projects"
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Helpers (robust parsing + matching)
 # ──────────────────────────────────────────────────────────────────────────────
 NBSP = u"\xa0"
@@ -516,82 +527,6 @@ def load_workbook(file_bytes: bytes, file_label: str):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Rate lookup (relaxed matching)
-# ──────────────────────────────────────────────────────────────────────────────
-def _canonical_col(df: pd.DataFrame, name: str) -> pd.Series:
-    s = get_col(df, name)
-    return s.astype(str).str.replace(NBSP, " ").str.strip().str.lower()
-
-
-def _relaxed_match(df: pd.DataFrame, discipline: str, personnel: str, category: str, schedule: Optional[str]) -> pd.DataFrame:
-    m = df.copy()
-    if "discipline" in m.columns:
-        disc_s = _canonical_col(m, "discipline").apply(_canon_disc)
-        m = m[disc_s == _canon_disc(discipline)]
-
-    if "personnel" in m.columns:
-        pers_s = _canonical_col(m, "personnel")
-        pick = pers_s == str(personnel).strip().lower()
-        if pick.any():
-            m = m[pick]
-
-    if "category" in m.columns:
-        cat_s = _canonical_col(m, "category")
-        pick = cat_s == str(category).strip().lower()
-        if pick.any():
-            m = m[pick]
-
-    if schedule and "schedule" in m.columns:
-        sch_s = _canonical_col(m, "schedule").apply(_canon_sched_tag)
-        tag = _canon_sched_tag(schedule)
-        pick = sch_s == tag
-        if pick.any():
-            m = m[pick]
-
-    return m
-
-
-def get_rate(
-    rate_source: str,
-    working: pd.DataFrame,
-    base_rate_col: Optional[str],
-    data_tbl: pd.DataFrame,
-    u1_tbl: pd.DataFrame,
-    u2_tbl: pd.DataFrame,
-    discipline: str,
-    personnel: str,
-    category: str,
-    unit_type: str,
-    schedule: str,
-) -> float:
-    prefer_usd = is_usd(schedule)
-    sheet_map = {"data": data_tbl, "u1": u1_tbl, "u2": u2_tbl}
-    sheet = sheet_map.get(rate_source.strip().lower())
-
-    if sheet is not None and not sheet.empty:
-        col = _rate_col_for_unit_type(sheet, unit_type, prefer_usd)
-        if col:
-            m = _relaxed_match(sheet, discipline, personnel, category, schedule)
-            if not m.empty:
-                return _to_float_safe(get_col(m, col).iloc[0])
-
-    if not working.empty:
-        for c in working.columns:
-            k = _canon(c)
-            if "unit rate" in k and (rate_source.strip().lower() in k):
-                m = _relaxed_match(working, discipline, personnel, category, schedule)
-                if not m.empty:
-                    return _to_float_safe(get_col(m, c).iloc[0])
-
-    if base_rate_col and base_rate_col in working.columns:
-        m = _relaxed_match(working, discipline, personnel, category, schedule)
-        if not m.empty:
-            return _to_float_safe(get_col(m, base_rate_col).iloc[0])
-
-    return 0.0
-
-
-# ──────────────────────────────────────────────────────────────────────────────
 # HARD NO-UPLOAD MODE — load from local folder
 # ──────────────────────────────────────────────────────────────────────────────
 DEFAULT_HOST_DIR = r"C:\mec_inputs" if os.name == "nt" else os.path.join(os.getcwd(), "input")
@@ -706,6 +641,82 @@ if GRID_KEY not in st.session_state:
 # Initialize saved projects
 if SAVED_PROJECTS_KEY not in st.session_state:
     st.session_state[SAVED_PROJECTS_KEY] = []
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Rate lookup (relaxed matching)
+# ──────────────────────────────────────────────────────────────────────────────
+def _canonical_col(df: pd.DataFrame, name: str) -> pd.Series:
+    s = get_col(df, name)
+    return s.astype(str).str.replace(NBSP, " ").str.strip().str.lower()
+
+
+def _relaxed_match(df: pd.DataFrame, discipline: str, personnel: str, category: str, schedule: Optional[str]) -> pd.DataFrame:
+    m = df.copy()
+    if "discipline" in m.columns:
+        disc_s = _canonical_col(m, "discipline").apply(_canon_disc)
+        m = m[disc_s == _canon_disc(discipline)]
+
+    if "personnel" in m.columns:
+        pers_s = _canonical_col(m, "personnel")
+        pick = pers_s == str(personnel).strip().lower()
+        if pick.any():
+            m = m[pick]
+
+    if "category" in m.columns:
+        cat_s = _canonical_col(m, "category")
+        pick = cat_s == str(category).strip().lower()
+        if pick.any():
+            m = m[pick]
+
+    if schedule and "schedule" in m.columns:
+        sch_s = _canonical_col(m, "schedule").apply(_canon_sched_tag)
+        tag = _canon_sched_tag(schedule)
+        pick = sch_s == tag
+        if pick.any():
+            m = m[pick]
+
+    return m
+
+
+def get_rate(
+    rate_source: str,
+    working: pd.DataFrame,
+    base_rate_col: Optional[str],
+    data_tbl: pd.DataFrame,
+    u1_tbl: pd.DataFrame,
+    u2_tbl: pd.DataFrame,
+    discipline: str,
+    personnel: str,
+    category: str,
+    unit_type: str,
+    schedule: str,
+) -> float:
+    prefer_usd = is_usd(schedule)
+    sheet_map = {"data": data_tbl, "u1": u1_tbl, "u2": u2_tbl}
+    sheet = sheet_map.get(rate_source.strip().lower())
+
+    if sheet is not None and not sheet.empty:
+        col = _rate_col_for_unit_type(sheet, unit_type, prefer_usd)
+        if col:
+            m = _relaxed_match(sheet, discipline, personnel, category, schedule)
+            if not m.empty:
+                return _to_float_safe(get_col(m, col).iloc[0])
+
+    if not working.empty:
+        for c in working.columns:
+            k = _canon(c)
+            if "unit rate" in k and (rate_source.strip().lower() in k):
+                m = _relaxed_match(working, discipline, personnel, category, schedule)
+                if not m.empty:
+                    return _to_float_safe(get_col(m, c).iloc[0])
+
+    if base_rate_col and base_rate_col in working.columns:
+        m = _relaxed_match(working, discipline, personnel, category, schedule)
+        if not m.empty:
+            return _to_float_safe(get_col(m, base_rate_col).iloc[0])
+
+    return 0.0
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Calculations
@@ -1110,52 +1121,37 @@ def to_excel_bytes(main_meta: pd.DataFrame, totals: pd.DataFrame, lines: pd.Data
 # ──────────────────────────────────────────────────────────────────────────────
 # Navigation helpers
 # ──────────────────────────────────────────────────────────────────────────────
-def stepper(active: str):
-    steps = [("MAIN", "Main Page"), ("TABLE", "Personnel Table"), ("TOTALS", "Totals & Line Items"), ("SUMMARY", "Summary & Download"), ("COMPARE", "Compare Projects")]
+def render_navigation():
+    """Render the navigation buttons at the top of the page"""
+    current_page = st.session_state["page"]
     
+    # Create navigation buttons
+    cols = st.columns(len(PAGES))
+    
+    for idx, (page_key, page_label) in enumerate(PAGES.items()):
+        with cols[idx]:
+            if st.button(
+                page_label,
+                key=f"nav_{page_key}",
+                use_container_width=True,
+                type="primary" if current_page == page_key else "secondary"
+            ):
+                st.session_state["page"] = page_key
+                do_rerun()
+    
+    # Add visual indicator
     st.markdown(
         f"""
-    <style>
-      .mec-steps {{
-        margin: 8px 0 24px;
-        display: flex;
-        gap: 4px;
-        flex-wrap: wrap;
-      }}
-      .mec-step {{
-        flex: 1;
-        min-width: 120px;
-        text-align: center;
-        padding: 10px 12px;
-        border-radius: 8px;
-        background: rgba(156, 163, 175, 0.1);
-        color: var(--text-muted);
-        font-weight: 600;
-        font-size: 13px;
-        transition: all 0.2s ease;
-        border: 1px solid transparent;
-      }}
-      .mec-step.active {{
-        background: var(--brand1);
-        color: #fff;
-        border-color: var(--brand1);
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-      }}
-      .mec-step:hover:not(.active) {{
-        background: rgba(156, 163, 175, 0.2);
-        border-color: rgba(156, 163, 175, 0.3);
-      }}
-    </style>
-    """,
-        unsafe_allow_html=True,
+        <div style="text-align: center; margin: 10px 0 20px 0;">
+            <span style="background: var(--brand1); color: white; padding: 6px 16px; border-radius: 20px; font-weight: 600; font-size: 0.9rem;">
+                📍 Current: {PAGES[current_page].replace('🏠', '').replace('👥', '').replace('📊', '').replace('📈', '').replace('🔄', '').strip()}
+            </span>
+        </div>
+        """,
+        unsafe_allow_html=True
     )
     
-    html = '<div class="mec-steps">'
-    for key, label in steps:
-        cls = "mec-step active" if key == active else "mec-step"
-        html += f"<div class='{cls}'>{label}</div>"
-    html += "</div>"
-    st.markdown(html, unsafe_allow_html=True)
+    st.markdown("---")
 
 
 def reset_grid():
@@ -1186,14 +1182,13 @@ def reset_grid():
 # Page renderers
 # ──────────────────────────────────────────────────────────────────────────────
 def render_main():
-    stepper("MAIN")
     st.markdown(
         f"""
-    <h1 style="color: var(--brand1); margin-bottom: 0.5rem;">MEC TOOL</h1>
-    <p style="color: var(--text-muted); font-size: 1.1rem; margin-bottom: 2rem;">
-      Major Engineering Contract Tool for CE Upstream
-    </p>
-    """,
+        <h1 style="color: var(--brand1); margin-bottom: 0.5rem;">MEC TOOL</h1>
+        <p style="color: var(--text-muted); font-size: 1.1rem; margin-bottom: 2rem;">
+          Major Engineering Contract Tool for CE Upstream
+        </p>
+        """,
         unsafe_allow_html=True,
     )
     
@@ -1286,7 +1281,6 @@ def render_main():
 
 
 def render_table():
-    stepper("TABLE")
     type_of_schedule = st.session_state["type_of_schedule"]
     rate_source = st.session_state["rate_source"]
     currency = currency_for(type_of_schedule)
@@ -1528,8 +1522,9 @@ function(params) {
     st.markdown("<br/>", unsafe_allow_html=True)
     c3, c4 = st.columns([1, 1])
     with c3:
-        if st.button("⬅️ Back to Main", use_container_width=True):
-            st.session_state["page"] = "MAIN"
+        if st.button("💾 Save for Comparison", use_container_width=True):
+            saved_project = save_current_project()
+            st.success(f"Project '{saved_project['name']}' saved for comparison!")
             do_rerun()
     with c4:
         if st.button("➡️ Go to Totals & Line Items", use_container_width=True, type="primary"):
@@ -1538,7 +1533,6 @@ function(params) {
 
 
 def render_totals():
-    stepper("TOTALS")
     type_of_schedule = st.session_state["type_of_schedule"]
     rate_source = st.session_state["rate_source"]
     currency = currency_for(type_of_schedule)
@@ -1690,18 +1684,17 @@ def render_totals():
             st.session_state["page"] = "TABLE"
             do_rerun()
     with c2:
-        if st.button("💾 Save for Comparison", use_container_width=True):
+        if st.button("💾 Save for Comparison", use_container_width=True, type="primary"):
             saved_project = save_current_project()
             st.success(f"Project '{saved_project['name']}' saved for comparison!")
             do_rerun()
     with c3:
-        if st.button("➡️ Go to Summary & Download", use_container_width=True, type="primary"):
+        if st.button("➡️ Go to Summary & Download", use_container_width=True):
             st.session_state["page"] = "SUMMARY"
             do_rerun()
 
 
 def render_summary():
-    stepper("SUMMARY")
     type_of_schedule = st.session_state["type_of_schedule"]
     rate_source = st.session_state["rate_source"]
     currency = currency_for(type_of_schedule)
@@ -1823,19 +1816,17 @@ def render_summary():
             st.session_state["page"] = "TOTALS"
             do_rerun()
     with c2:
-        if st.button("💾 Save for Comparison", use_container_width=True):
+        if st.button("💾 Save for Comparison", use_container_width=True, type="primary"):
             saved_project = save_current_project()
             st.success(f"Project '{saved_project['name']}' saved for comparison!")
             do_rerun()
     with c3:
-        if st.button("🔁 Back to Main Page", use_container_width=True):
-            st.session_state["page"] = "MAIN"
+        if st.button("🔄 Compare Projects", use_container_width=True):
+            st.session_state["page"] = "COMPARE"
             do_rerun()
 
 
 def render_compare():
-    stepper("COMPARE")
-    
     st.markdown(
         f"""
         <h1 style="color: var(--brand1); margin-bottom: 0.5rem;">Project Comparison</h1>
@@ -2092,6 +2083,24 @@ def render_compare():
 # ──────────────────────────────────────────────────────────────────────────────
 # TOP HERO + ROUTER
 # ──────────────────────────────────────────────────────────────────────────────
+
+# Main app header
+st.markdown(
+    f"""
+    <div style="text-align: center; margin-bottom: 2rem;">
+        <h1 style="color: var(--brand1); margin-bottom: 0.5rem;">MEC TOOL</h1>
+        <p style="color: var(--text-muted); font-size: 1.1rem;">
+          Major Engineering Contract Tool for CE Upstream
+        </p>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
+# Navigation buttons
+render_navigation()
+
+# Render current page
 page = st.session_state["page"]
 if page == "MAIN":
     render_main()
