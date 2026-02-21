@@ -156,6 +156,23 @@ def apply_theme(dark: bool, brand1: str, brand2: str, muted: str) -> None:
         background: rgba(156, 163, 175, 0.15);
         color: #9CA3AF;
       }}
+      /* Monthly loading table styling */
+      .monthly-loading-table {{
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 10px;
+      }}
+      .monthly-loading-table th {{
+        background-color: var(--brand1);
+        color: white;
+        padding: 8px;
+        text-align: center;
+      }}
+      .monthly-loading-table td {{
+        padding: 8px;
+        text-align: center;
+        border: 1px solid var(--text-muted);
+      }}
     </style>
     """,
         unsafe_allow_html=True,
@@ -187,6 +204,18 @@ B_D_CATEGORY_FALLBACK = [
 AC_CATEGORIES = ["Malaysian", "Regional", "Expatriate"]
 UNIT_TYPES = ["Minimum", "Maximum", "Normalise", "MMC", "DAR", "AKER", "TUAH", "PRW", "PUSB"]
 RATE_SOURCES = ["Data", "U1", "U2"]
+
+# Third Party & Non-Labour cost categories
+THIRD_PARTY_CATEGORIES = [
+    "Third Party Services",
+    "Equipment Rental",
+    "Software Licenses",
+    "Travel & Accommodation",
+    "Training",
+    "Material Costs",
+    "Subcontractor",
+    "Other Direct Costs"
+]
 
 DISCIPLINE_ROW_COUNTS = {
     "General": 9,
@@ -287,6 +316,8 @@ DISCIPLINE_SWATCH = {
 }
 
 GRID_KEY = "grid_df"
+THIRD_PARTY_KEY = "third_party_df"
+MONTHLY_LOADING_KEY = "monthly_loading_df"
 SAVED_PROJECTS_KEY = "saved_projects"
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -295,6 +326,8 @@ SAVED_PROJECTS_KEY = "saved_projects"
 PAGES = {
     "MAIN": "🏠 Main Page",
     "TABLE": "👥 Personnel Table", 
+    "THIRD_PARTY": "💰 Third Party & Non-Labour",
+    "LOADING": "📅 Monthly Loading",
     "TOTALS": "📊 Totals & Line Items",
     "SUMMARY": "📈 Summary & Download",
     "COMPARE": "🔄 Compare Projects"
@@ -614,7 +647,10 @@ st.session_state.setdefault("project_date", None)
 st.session_state.setdefault("type_of_package", package_opts[0] if package_opts else "U1")
 st.session_state.setdefault("type_of_schedule", schedule_opts[0] if schedule_opts else "Schedule A")
 st.session_state.setdefault("rate_source", RATE_SOURCES[0])
+st.session_state.setdefault("kpbi_rate", 0.0)  # KPBI rate for Method B
+st.session_state.setdefault("apply_kpbi_to_all", True)  # Apply KPBI rate to all labour costs
 
+# Initialize Personnel Table
 if GRID_KEY not in st.session_state:
     rows = []
     tmp_schedule = st.session_state["type_of_schedule"]
@@ -637,6 +673,33 @@ if GRID_KEY not in st.session_state:
                 }
             )
     st.session_state[GRID_KEY] = pd.DataFrame(rows)
+
+# Initialize Third Party & Non-Labour items
+if THIRD_PARTY_KEY not in st.session_state:
+    third_party_rows = []
+    for category in THIRD_PARTY_CATEGORIES:
+        third_party_rows.append(
+            {
+                "Category": category,
+                "Description": "",
+                "Basis": "% of Labour Cost",
+                "Percentage": 0.0,
+                "Fixed Amount": 0.0,
+                "Remarks": ""
+            }
+        )
+    st.session_state[THIRD_PARTY_KEY] = pd.DataFrame(third_party_rows)
+
+# Initialize Monthly Loading
+if MONTHLY_LOADING_KEY not in st.session_state:
+    # Create default 12-month loading (100% each month)
+    months = [f"Month {i+1:02d}" for i in range(12)]
+    monthly_data = {
+        "Month": months,
+        "Loading Factor (%)": [100.0] * 12,
+        "Weightage Distribution": [100.0/12] * 12  # Equal distribution
+    }
+    st.session_state[MONTHLY_LOADING_KEY] = pd.DataFrame(monthly_data)
 
 # Initialize saved projects
 if SAVED_PROJECTS_KEY not in st.session_state:
@@ -721,7 +784,8 @@ def get_rate(
 # ──────────────────────────────────────────────────────────────────────────────
 # Calculations
 # ──────────────────────────────────────────────────────────────────────────────
-def compute_line_items(grid_df: pd.DataFrame, currency: str, rate_source: str, type_of_schedule: str) -> pd.DataFrame:
+def calculate_labour_costs(grid_df: pd.DataFrame, currency: str, rate_source: str, type_of_schedule: str) -> pd.DataFrame:
+    """Calculate labour costs from personnel table"""
     if grid_df.empty:
         return pd.DataFrame(
             columns=[
@@ -734,7 +798,7 @@ def compute_line_items(grid_df: pd.DataFrame, currency: str, rate_source: str, t
                 "Weightage (FTE)",
                 "Duration (months)",
                 "Total Hours",
-                f"Total Cost ({currency})",
+                f"Labour Cost ({currency})",
             ]
         )
 
@@ -778,7 +842,7 @@ def compute_line_items(grid_df: pd.DataFrame, currency: str, rate_source: str, t
     df["Total Hours"] = (
         df["Weightage (FTE)"].astype("float32") * float(HOURS_PER_MONTH) * df["Duration (months)"].astype("float32")
     )
-    df[f"Total Cost ({currency})"] = (df[f"Unit Rate ({currency})"] * df["Total Hours"]).astype("float32")
+    df[f"Labour Cost ({currency})"] = (df[f"Unit Rate ({currency})"] * df["Total Hours"]).astype("float32")
 
     return df[
         [
@@ -791,28 +855,108 @@ def compute_line_items(grid_df: pd.DataFrame, currency: str, rate_source: str, t
             "Weightage (FTE)",
             "Duration (months)",
             "Total Hours",
-            f"Total Cost ({currency})",
+            f"Labour Cost ({currency})",
         ]
     ]
 
 
-def compute_totals(df_out: pd.DataFrame, currency: str):
-    total_manhour = float(df_out["Total Hours"].sum()) if not df_out.empty else 0.0
-    rates_nonzero = (
-        df_out[f"Unit Rate ({currency})"].replace(0, pd.NA).dropna() if not df_out.empty else pd.Series(dtype=float)
-    )
-    avg_rate = float(rates_nonzero.mean()) if not rates_nonzero.empty else 0.0
-    total_by_average = avg_rate * total_manhour
-    total_exact = float(df_out[f"Total Cost ({currency})"].sum()) if not df_out.empty else 0.0
+def calculate_third_party_costs(third_party_df: pd.DataFrame, total_labour_cost: float, currency: str) -> pd.DataFrame:
+    """Calculate third party and non-labour costs based on percentage or fixed amount"""
+    if third_party_df.empty:
+        return pd.DataFrame(columns=["Category", "Description", "Basis", f"Cost ({currency})", "Remarks"])
+    
+    df = third_party_df.copy()
+    df[f"Cost ({currency})"] = 0.0
+    
+    for idx, row in df.iterrows():
+        if row["Basis"] == "% of Labour Cost":
+            df.loc[idx, f"Cost ({currency})"] = total_labour_cost * (float(row["Percentage"]) / 100.0)
+        else:  # Fixed Amount
+            df.loc[idx, f"Cost ({currency})"] = float(row["Fixed Amount"])
+    
+    return df[["Category", "Description", "Basis", f"Cost ({currency})", "Remarks"]]
 
-    if df_out.empty:
-        totals = pd.DataFrame(columns=["Discipline", "Manhour", f"Total Price ({currency})"])
-    else:
-        totals = df_out.groupby("Discipline", as_index=False).agg(
+
+def apply_monthly_loading(labour_df: pd.DataFrame, third_party_df: pd.DataFrame, 
+                         monthly_loading_df: pd.DataFrame, currency: str) -> Dict:
+    """Apply monthly loading factors to costs"""
+    if monthly_loading_df.empty:
+        return {
+            "monthly_labour": {},
+            "monthly_third_party": {},
+            "total_by_month": {}
+        }
+    
+    months = monthly_loading_df["Month"].tolist()
+    loading_factors = monthly_loading_df["Loading Factor (%)"].tolist()
+    weightage_dist = monthly_loading_df["Weightage Distribution"].tolist()
+    
+    total_labour = labour_df[f"Labour Cost ({currency})"].sum() if not labour_df.empty else 0
+    total_third_party = third_party_df[f"Cost ({currency})"].sum() if not third_party_df.empty else 0
+    
+    monthly_labour = {}
+    monthly_third_party = {}
+    total_by_month = {}
+    
+    for i, month in enumerate(months):
+        factor = loading_factors[i] / 100.0
+        weight = weightage_dist[i] / 100.0
+        
+        # Apply loading to costs
+        monthly_labour[month] = total_labour * weight * factor
+        monthly_third_party[month] = total_third_party * weight * factor
+        total_by_month[month] = monthly_labour[month] + monthly_third_party[month]
+    
+    return {
+        "monthly_labour": monthly_labour,
+        "monthly_third_party": monthly_third_party,
+        "total_by_month": total_by_month,
+        "months": months
+    }
+
+
+def compute_totals(labour_df: pd.DataFrame, third_party_df: pd.DataFrame, 
+                  monthly_loading_df: pd.DataFrame, currency: str, kpbi_rate: float):
+    """Compute totals with Method A (Exact) and Method B (KPBI rate)"""
+    # Labour costs
+    total_labour_exact = float(labour_df[f"Labour Cost ({currency})"].sum()) if not labour_df.empty else 0.0
+    total_hours = float(labour_df["Total Hours"].sum()) if not labour_df.empty else 0.0
+    
+    # KPBI Method (Method B) - apply KPBI rate to all labour hours
+    total_labour_kpbi = total_hours * kpbi_rate if kpbi_rate > 0 else 0.0
+    
+    # Third party costs (these are the same for both methods)
+    total_third_party = float(third_party_df[f"Cost ({currency})"].sum()) if not third_party_df.empty else 0.0
+    
+    # Method A: Exact labour costs + third party costs
+    total_exact = total_labour_exact + total_third_party
+    
+    # Method B: KPBI labour costs + third party costs
+    total_kpbi = total_labour_kpbi + total_third_party
+    
+    # Discipline-wise totals (for exact method)
+    if not labour_df.empty:
+        discipline_totals = labour_df.groupby("Discipline", as_index=False).agg(
             Manhour=("Total Hours", "sum"),
-            **{f"Total Price ({currency})": (f"Total Cost ({currency})", "sum")},
+            **{f"Labour Cost ({currency})": (f"Labour Cost ({currency})", "sum")},
         )
-    return total_manhour, avg_rate, total_by_average, total_exact, totals
+    else:
+        discipline_totals = pd.DataFrame(columns=["Discipline", "Manhour", f"Labour Cost ({currency})"])
+    
+    # Apply monthly loading
+    monthly_breakdown = apply_monthly_loading(labour_df, third_party_df, monthly_loading_df, currency)
+    
+    return {
+        "total_hours": total_hours,
+        "total_labour_exact": total_labour_exact,
+        "total_labour_kpbi": total_labour_kpbi,
+        "total_third_party": total_third_party,
+        "total_exact": total_exact,
+        "total_kpbi": total_kpbi,
+        "kpbi_rate": kpbi_rate,
+        "discipline_totals": discipline_totals,
+        "monthly_breakdown": monthly_breakdown
+    }
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -823,9 +967,12 @@ def save_current_project():
     type_of_schedule = st.session_state["type_of_schedule"]
     rate_source = st.session_state["rate_source"]
     currency = currency_for(type_of_schedule)
+    kpbi_rate = st.session_state["kpbi_rate"]
     
-    df_out = compute_line_items(st.session_state[GRID_KEY], currency, rate_source, type_of_schedule)
-    total_manhour, avg_rate, total_by_average, total_exact, totals = compute_totals(df_out, currency)
+    labour_df = calculate_labour_costs(st.session_state[GRID_KEY], currency, rate_source, type_of_schedule)
+    total_labour = float(labour_df[f"Labour Cost ({currency})"].sum()) if not labour_df.empty else 0.0
+    third_party_df = calculate_third_party_costs(st.session_state[THIRD_PARTY_KEY], total_labour, currency)
+    totals = compute_totals(labour_df, third_party_df, st.session_state[MONTHLY_LOADING_KEY], currency, kpbi_rate)
     
     project_data = {
         "id": datetime.now().strftime("%Y%m%d_%H%M%S"),
@@ -836,12 +983,16 @@ def save_current_project():
         "type_of_schedule": type_of_schedule,
         "rate_source": rate_source,
         "currency": currency,
-        "total_manhour": total_manhour,
-        "avg_rate": avg_rate,
-        "total_by_average": total_by_average,
-        "total_exact": total_exact,
-        "totals": totals.to_dict('records'),
-        "line_items": df_out.to_dict('records'),
+        "kpbi_rate": kpbi_rate,
+        "total_hours": totals["total_hours"],
+        "total_labour_exact": totals["total_labour_exact"],
+        "total_labour_kpbi": totals["total_labour_kpbi"],
+        "total_third_party": totals["total_third_party"],
+        "total_exact": totals["total_exact"],
+        "total_kpbi": totals["total_kpbi"],
+        "discipline_totals": totals["discipline_totals"].to_dict('records') if not totals["discipline_totals"].empty else [],
+        "labour_line_items": labour_df.to_dict('records'),
+        "third_party_items": third_party_df.to_dict('records'),
         "personnel_count": len(st.session_state[GRID_KEY]),
         "disciplines_used": st.session_state[GRID_KEY]["Discipline"].nunique()
     }
@@ -854,44 +1005,23 @@ def save_current_project():
 def compare_projects(project1, project2):
     """Compare two projects and return comparison metrics"""
     comparison = {
-        "manhour_diff": project2["total_manhour"] - project1["total_manhour"],
-        "manhour_pct": ((project2["total_manhour"] - project1["total_manhour"]) / project1["total_manhour"] * 100) if project1["total_manhour"] > 0 else 0,
-        "cost_diff": project2["total_exact"] - project1["total_exact"],
-        "cost_pct": ((project2["total_exact"] - project1["total_exact"]) / project1["total_exact"] * 100) if project1["total_exact"] > 0 else 0,
-        "avg_rate_diff": project2["avg_rate"] - project1["avg_rate"],
-        "avg_rate_pct": ((project2["avg_rate"] - project1["avg_rate"]) / project1["avg_rate"] * 100) if project1["avg_rate"] > 0 else 0,
+        "hours_diff": project2["total_hours"] - project1["total_hours"],
+        "hours_pct": ((project2["total_hours"] - project1["total_hours"]) / project1["total_hours"] * 100) if project1["total_hours"] > 0 else 0,
+        "exact_cost_diff": project2["total_exact"] - project1["total_exact"],
+        "exact_cost_pct": ((project2["total_exact"] - project1["total_exact"]) / project1["total_exact"] * 100) if project1["total_exact"] > 0 else 0,
+        "kpbi_cost_diff": project2["total_kpbi"] - project1["total_kpbi"],
+        "kpbi_cost_pct": ((project2["total_kpbi"] - project1["total_kpbi"]) / project1["total_kpbi"] * 100) if project1["total_kpbi"] > 0 else 0,
     }
-    
-    # Discipline-wise comparison
-    df1 = pd.DataFrame(project1["totals"])
-    df2 = pd.DataFrame(project2["totals"])
-    
-    # Merge for comparison
-    if not df1.empty and not df2.empty:
-        merged = pd.merge(
-            df1[["Discipline", "Manhour", f"Total Price ({project1['currency']})"]],
-            df2[["Discipline", "Manhour", f"Total Price ({project2['currency']})"]],
-            on="Discipline",
-            how="outer",
-            suffixes=("_1", "_2")
-        )
-        merged = merged.fillna(0)
-        
-        # Calculate differences
-        merged["Manhour_Diff"] = merged["Manhour_2"] - merged["Manhour_1"]
-        merged["Cost_Diff"] = merged[f"Total Price ({project2['currency']})_2"] - merged[f"Total Price ({project1['currency']})_1"]
-        
-        comparison["discipline_comparison"] = merged.to_dict('records')
-    else:
-        comparison["discipline_comparison"] = []
     
     return comparison
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Export to Excel (styled; 3 sheets)
+# Export to Excel (styled; multiple sheets)
 # ──────────────────────────────────────────────────────────────────────────────
-def to_excel_bytes(main_meta: pd.DataFrame, totals: pd.DataFrame, lines: pd.DataFrame, schedule_label: str, currency: str):
+def to_excel_bytes(main_meta: pd.DataFrame, totals: dict, labour_df: pd.DataFrame, 
+                   third_party_df: pd.DataFrame, monthly_df: pd.DataFrame, 
+                   schedule_label: str, currency: str):
     from openpyxl import Workbook
     from openpyxl.utils import get_column_letter
     from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
@@ -939,6 +1069,7 @@ def to_excel_bytes(main_meta: pd.DataFrame, totals: pd.DataFrame, lines: pd.Data
         ("TP/SPECIALIST", main_meta.iloc[0].get("TP/Specialist", "")),
         ("TYPE OF PACKAGE", main_meta.iloc[0].get("Type of Package", "")),
         ("TYPE OF SCHEDULE", main_meta.iloc[0].get("Type of Schedule", "")),
+        ("KPBI RATE", f"{main_meta.iloc[0].get('KPBI Rate', 0):,.2f}"),
     ]
     r0 = 6
     for i, (lbl, val) in enumerate(fields):
@@ -948,7 +1079,27 @@ def to_excel_bytes(main_meta: pd.DataFrame, totals: pd.DataFrame, lines: pd.Data
         ws[f"C{r}"].font = Font(bold=True)
         paint_range(ws, f"E{r}:I{r}", fill=PatternFill("solid", fgColor=LIGHT), border=Border(left=THIN, right=THIN, top=THIN, bottom=THIN))
 
-    notes = r0 + len(fields) + 3
+    # Summary Results
+    summary_r = r0 + len(fields) + 3
+    ws[f"C{summary_r}"].value = "SUMMARY RESULTS"
+    ws[f"C{summary_r}"].font = Font(bold=True, size=14)
+    
+    results = [
+        ("Total Manhours", f"{totals['total_hours']:,.0f}"),
+        ("Labour Cost (Exact)", f"{currency} {totals['total_labour_exact']:,.2f}"),
+        ("Labour Cost (KPBI)", f"{currency} {totals['total_labour_kpbi']:,.2f}"),
+        ("Third Party Cost", f"{currency} {totals['total_third_party']:,.2f}"),
+        ("METHOD A - Exact Total", f"{currency} {totals['total_exact']:,.2f}"),
+        ("METHOD B - KPBI Total", f"{currency} {totals['total_kpbi']:,.2f}"),
+    ]
+    
+    for i, (lbl, val) in enumerate(results):
+        r = summary_r + 2 + i
+        ws[f"C{r}"].value = lbl
+        ws[f"E{r}"].value = val
+        ws[f"C{r}"].font = Font(bold=True)
+
+    notes = summary_r + len(results) + 5
     ws[f"C{notes}"].value = "Notes:"
     ws[f"C{notes}"].font = Font(bold=True)
     ws[f"C{notes+2}"].value = "Type of Package"
@@ -969,30 +1120,10 @@ def to_excel_bytes(main_meta: pd.DataFrame, totals: pd.DataFrame, lines: pd.Data
     set_col_w(ws, {"B": 2, "C": 22, "D": 40, "E": 36, "F": 12, "G": 10, "H": 10, "I": 6})
     ws.freeze_panes = "B6"
 
-    # Working Page
-    ws2 = wb.create_sheet("Working Page")
-    unit_rate_col = next((c for c in lines.columns if c.startswith("Unit Rate (")), f"Unit Rate ({currency})")
-    total_cost_col = next((c for c in lines.columns if c.startswith("Total Cost (")), f"Total Cost ({currency})")
-
-    work = lines[
-        [
-            "Discipline",
-            "Personnel",
-            "Category",
-            "Type of Unit Rate",
-            "Rate Source",
-            unit_rate_col,
-            "Weightage (FTE)",
-            "Duration (months)",
-            "Total Hours",
-            total_cost_col,
-        ]
-    ].copy()
-    NOTES_COL = "Notes"
-    work[NOTES_COL] = ""
-
+    # Labour Working Page
+    ws2 = wb.create_sheet("Labour Costs")
     ws2.merge_cells("B2:U3")
-    ws2["B2"].value = "ENGINEERING STUDIES"
+    ws2["B2"].value = "LABOUR COSTS"
     paint_range(
         ws2,
         "B2:U3",
@@ -1001,7 +1132,7 @@ def to_excel_bytes(main_meta: pd.DataFrame, totals: pd.DataFrame, lines: pd.Data
         align=Alignment(horizontal="center", vertical="center"),
     )
 
-    headers = list(work.columns)
+    headers = list(labour_df.columns)
     start_row = 5
     for j, h in enumerate(headers, start=2):
         c = ws2.cell(row=start_row, column=j, value=h)
@@ -1010,108 +1141,85 @@ def to_excel_bytes(main_meta: pd.DataFrame, totals: pd.DataFrame, lines: pd.Data
         c.alignment = Alignment(horizontal="center")
         c.border = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 
-    def set_col_w(ws, widths):
-        for col, w in widths.items():
-            ws.column_dimensions[col].width = w
-
     set_col_w(ws2, {"B": 16, "C": 30, "D": 18, "E": 18, "F": 14, "U": 22})
     ws2.freeze_panes = "B6"
 
     cur_r = start_row + 1
-
-    def write_row(vals, row_disc: str, is_subtotal=False):
-        nonlocal cur_r
-        for j, v in enumerate(vals, start=2):
-            cell = ws2.cell(row=cur_r, column=j, value=v)
-            if not is_subtotal:
-                tint = DISCIPLINE_COLORS.get(row_disc, None)
-                if tint:
-                    cell.fill = PatternFill("solid", fgColor=tint)
-                cell.border = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
-            else:
-                cell.border = Border(left=THIN, right=THIN, top=MED, bottom=THIN)
-                cell.font = Font(bold=True)
-            if headers[j - 2] == NOTES_COL:
-                cell.alignment = Alignment(horizontal="center")
-            header = headers[j - 2]
-            if isinstance(v, (int, float)):
-                if "Rate" in header or "Cost" in header:
-                    cell.number_format = f'"{currency}" #,##0.00'
-                elif "Hours" in header:
-                    cell.number_format = "#,##0.00"
-                elif "Weightage" in header:
-                    cell.number_format = "0.0"
-                elif "Duration" in header:
-                    cell.number_format = "0"
+    for _, row in labour_df.iterrows():
+        for j, val in enumerate(row, start=2):
+            cell = ws2.cell(row=cur_r, column=j, value=val)
+            cell.border = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
         cur_r += 1
 
-    for disc, group in work.groupby("Discipline", sort=False):
-        for _, row in group.iterrows():
-            write_row([row[h] for h in headers], row_disc=disc, is_subtotal=False)
-        sub = {h: "" for h in headers}
-        sub["Discipline"] = disc
-        sub[NOTES_COL] = "TOTAL PER DISCIPLINE"
-        sub["Total Hours"] = float(group["Total Hours"].fillna(0).sum())
-        sub[total_cost_col] = float(group[total_cost_col].fillna(0).sum())
-        write_row([sub[h] for h in headers], row_disc=disc, is_subtotal=True)
-
-    last_col = get_column_letter(1 + len(headers))
-    ws2.auto_filter.ref = f"B{start_row}:{last_col}{cur_r-1}"
-
-    # Summary
-    ws3 = wb.create_sheet("Summary")
-    ws3.merge_cells("C3:H4")
-    ws3["C3"].value = f"TYPE OF SCHEDULE — {schedule_label}"
+    # Third Party Page
+    ws3 = wb.create_sheet("Third Party & Non-Labour")
+    ws3.merge_cells("B2:J3")
+    ws3["B2"].value = "THIRD PARTY & NON-LABOUR COSTS"
     paint_range(
         ws3,
-        "C3:H4",
+        "B2:J3",
         fill=PatternFill("solid", fgColor=BRAND_HEX),
         font=Font(color="FFFFFF", bold=True, size=12),
         align=Alignment(horizontal="center", vertical="center"),
     )
 
-    hdr_row = 6
-    for i, h in enumerate(["No.", "Description", "Manhour", f"Total Price ({currency})"], start=3):
-        c = ws3.cell(row=hdr_row, column=i, value=h)
+    tp_headers = list(third_party_df.columns)
+    start_row_tp = 5
+    for j, h in enumerate(tp_headers, start=2):
+        c = ws3.cell(row=start_row_tp, column=j, value=h)
         c.fill = PatternFill("solid", fgColor="E6F9F7")
         c.font = Font(bold=True)
         c.alignment = Alignment(horizontal="center")
         c.border = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 
-    ws3.merge_cells(f"C{hdr_row-1}:F{hdr_row-1}")
-    ws3[f"C{hdr_row-1}"].value = "BASE SCOPE"
-    ws3[f"C{hdr_row-1}"].font = Font(bold=True, color="155E59")
+    cur_r_tp = start_row_tp + 1
+    for _, row in third_party_df.iterrows():
+        for j, val in enumerate(row, start=2):
+            cell = ws3.cell(row=cur_r_tp, column=j, value=val)
+            cell.border = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
+        cur_r_tp += 1
 
-    r = hdr_row + 1
-    if not totals.empty:
-        t = totals.copy()
-        t.insert(0, "No.", range(1, len(t) + 1))
-        t = t.rename(columns={"Discipline": "Description"})
-        for _, row in t.iterrows():
-            ws3.cell(row=r, column=3, value=row["No."]).border = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
-            ws3.cell(row=r, column=4, value=row["Description"]).border = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
-            mh = ws3.cell(row=r, column=5, value=float(row["Manhour"]))
-            tp = ws3.cell(row=r, column=6, value=float(row[f"Total Price ({currency})"]))
-            mh.number_format = "#,##0"
-            tp.number_format = f'"{currency}" #,##0.00'
-            mh.border = tp.border = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
-            r += 1
+    # Monthly Loading Page
+    ws4 = wb.create_sheet("Monthly Loading")
+    ws4.merge_cells("B2:H3")
+    ws4["B2"].value = "MONTHLY LOADING DISTRIBUTION"
+    paint_range(
+        ws4,
+        "B2:H3",
+        fill=PatternFill("solid", fgColor=BRAND_HEX),
+        font=Font(color="FFFFFF", bold=True, size=12),
+        align=Alignment(horizontal="center", vertical="center"),
+    )
 
-    ws3.merge_cells(f"C{r+2}:E{r+2}")
-    ws3[f"C{r+2}"].value = "Total Raw Bid Price"
-    ws3[f"C{r+2}"].font = Font(bold=True, color="FFFFFF")
-    ws3[f"C{r+2}"].fill = PatternFill("solid", fgColor=BRAND_HEX)
-    ws3[f"C{r+2}"].alignment = Alignment(horizontal="right", vertical="center")
+    monthly_headers = list(monthly_df.columns) + [f"Labour Cost ({currency})", f"Third Party ({currency})", f"Total ({currency})"]
+    start_row_monthly = 5
+    for j, h in enumerate(monthly_headers, start=2):
+        c = ws4.cell(row=start_row_monthly, column=j, value=h)
+        c.fill = PatternFill("solid", fgColor="E6F9F7")
+        c.font = Font(bold=True)
+        c.alignment = Alignment(horizontal="center")
+        c.border = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 
-    total_val = float(totals[f"Total Price ({currency})"].sum()) if not totals.empty else 0.0
-    tc = ws3[f"F{r+2}"]
-    tc.value = total_val
-    tc.number_format = f'"{currency}" #,##0.00'
-    tc.fill = PatternFill("solid", fgColor=BRAND_HEX)
-    tc.font = Font(bold=True, color="FFFFFF")
-    tc.alignment = Alignment(horizontal="center")
-
-    ws3.freeze_panes = "C7"
+    monthly_breakdown = totals["monthly_breakdown"]
+    cur_r_monthly = start_row_monthly + 1
+    for i, month in enumerate(monthly_breakdown["months"]):
+        ws4.cell(row=cur_r_monthly, column=2, value=month).border = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
+        ws4.cell(row=cur_r_monthly, column=3, value=monthly_df.iloc[i]["Loading Factor (%)"]).border = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
+        ws4.cell(row=cur_r_monthly, column=4, value=monthly_df.iloc[i]["Weightage Distribution"]).border = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
+        
+        cell_labour = ws4.cell(row=cur_r_monthly, column=5, value=monthly_breakdown["monthly_labour"][month])
+        cell_labour.number_format = f'"{currency}" #,##0.00'
+        cell_labour.border = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
+        
+        cell_tp = ws4.cell(row=cur_r_monthly, column=6, value=monthly_breakdown["monthly_third_party"][month])
+        cell_tp.number_format = f'"{currency}" #,##0.00'
+        cell_tp.border = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
+        
+        cell_total = ws4.cell(row=cur_r_monthly, column=7, value=monthly_breakdown["total_by_month"][month])
+        cell_total.number_format = f'"{currency}" #,##0.00'
+        cell_total.border = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
+        
+        cur_r_monthly += 1
 
     out = io.BytesIO()
     wb.save(out)
@@ -1144,7 +1252,7 @@ def render_navigation():
         f"""
         <div style="text-align: center; margin: 10px 0 20px 0;">
             <span style="background: var(--brand1); color: white; padding: 6px 16px; border-radius: 20px; font-weight: 600; font-size: 0.9rem;">
-                📍 Current: {PAGES[current_page].replace('🏠', '').replace('👥', '').replace('📊', '').replace('📈', '').replace('🔄', '').strip()}
+                📍 Current: {PAGES[current_page].replace('🏠', '').replace('👥', '').replace('💰', '').replace('📅', '').replace('📊', '').replace('📈', '').replace('🔄', '').strip()}
             </span>
         </div>
         """,
@@ -1268,8 +1376,24 @@ def render_main():
             unsafe_allow_html=True
         )
 
+    # KPBI Rate input
     st.markdown("<br/>", unsafe_allow_html=True)
-    c1, c2 = st.columns([1, 1])
+    st.subheader("KPBI Rate Settings (Method B)")
+    kpbi_col1, kpbi_col2 = st.columns([1, 3])
+    with kpbi_col1:
+        st.session_state["kpbi_rate"] = st.number_input(
+            "KPBI Rate (per hour)",
+            min_value=0.0,
+            value=st.session_state.get("kpbi_rate", 0.0),
+            step=10.0,
+            format="%.2f",
+            help="KPBI rate to be used for Method B calculation"
+        )
+    with kpbi_col2:
+        st.info("Method B calculates labour costs using: Total Hours × KPBI Rate + Third Party Costs")
+
+    st.markdown("<br/>", unsafe_allow_html=True)
+    c1, c2, c3 = st.columns([1, 1, 1])
     with c1:
         if st.button("➡️ Go to Personnel Table", use_container_width=True, type="primary"):
             st.session_state["page"] = "TABLE"
@@ -1277,6 +1401,10 @@ def render_main():
     with c2:
         if st.button("↺ Reset Grid to Defaults", use_container_width=True):
             reset_grid()
+            do_rerun()
+    with c3:
+        if st.button("💰 Third Party Costs", use_container_width=True):
+            st.session_state["page"] = "THIRD_PARTY"
             do_rerun()
 
 
@@ -1332,7 +1460,7 @@ def render_table():
 
     # Row controls
     st.markdown("<br/>", unsafe_allow_html=True)
-    c1, c2 = st.columns([1, 1])
+    c1, c2, c3 = st.columns([1, 1, 1])
     with c1:
         if st.button("➕ Add blank row", use_container_width=True):
             df = st.session_state[GRID_KEY].copy()
@@ -1350,6 +1478,10 @@ def render_table():
     with c2:
         if st.button("↺ Reset to defaults", use_container_width=True):
             reset_grid()
+            do_rerun()
+    with c3:
+        if st.button("📅 Next: Monthly Loading", use_container_width=True):
+            st.session_state["page"] = "LOADING"
             do_rerun()
 
     # ── AG Grid ────────────────────────────────────────────────────────────────
@@ -1428,19 +1560,6 @@ function(params) {
         theme="streamlit",
     )
 
-    # Debounce computations for performance
-    st.markdown(" ")
-    col_db1, col_db2 = st.columns([1, 1])
-    with col_db1:
-        auto_recalc = st.toggle(
-            "Auto‑recalculate totals",
-            value=True,
-            help="Turn off for faster editing on large tables.",
-        )
-    with col_db2:
-        recalc_clicked = st.button("Recalculate now", use_container_width=True)
-    should_recalc = auto_recalc or recalc_clicked
-
     try:
         grid_resp = AgGrid(df, update_on="value_changed", **aggrid_common)  # new API
     except TypeError:
@@ -1450,85 +1569,331 @@ function(params) {
     df_current = pd.DataFrame(grid_resp["data"])
     st.session_state[GRID_KEY] = df_current
 
-    # Results at bottom
-    if should_recalc:
-        df_out = compute_line_items(st.session_state[GRID_KEY], currency, rate_source, type_of_schedule)
-        total_manhour, avg_rate, total_by_average, total_exact, totals = compute_totals(df_out, currency)
-        st.session_state["_last_df_out"] = df_out
-        st.session_state["_last_totals"] = totals
-    else:
-        df_out = st.session_state.get("_last_df_out", pd.DataFrame())
-        totals = st.session_state.get("_last_totals", pd.DataFrame())
-        total_manhour = df_out.get("Total Hours", pd.Series(dtype=float)).sum() if not df_out.empty else 0.0
-        avg_rate = 0.0
-        total_by_average = 0.0
-        total_exact = 0.0
+    # Quick preview of labour costs
+    st.subheader("Labour Cost Preview")
+    labour_df = calculate_labour_costs(st.session_state[GRID_KEY], currency, rate_source, type_of_schedule)
+    total_labour = labour_df[f"Labour Cost ({currency})"].sum() if not labour_df.empty else 0
+    
+    st.markdown(
+        f"""
+        <div style="background: var(--surface-alt); padding: 1rem; border-radius: 10px;">
+            <h3 style="margin: 0; color: var(--brand1);">Total Labour Cost: {currency} {total_labour:,.2f}</h3>
+            <p style="margin: 0.5rem 0 0 0; color: var(--text-muted);">Based on current personnel entries</p>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
-    st.header("Results")
+
+def render_third_party():
+    st.header("💰 Third Party & Non-Labour Costs")
+    st.caption("Add third party services, equipment rental, software, and other non-labour costs")
     
-    # Improved metrics display
-    col1, col2, col3, col4 = st.columns(4)
+    currency = currency_for(st.session_state["type_of_schedule"])
     
+    # Get current labour total for percentage calculations
+    labour_df = calculate_labour_costs(
+        st.session_state[GRID_KEY], 
+        currency, 
+        st.session_state["rate_source"], 
+        st.session_state["type_of_schedule"]
+    )
+    total_labour = labour_df[f"Labour Cost ({currency})"].sum() if not labour_df.empty else 0
+    
+    st.info(f"Current Total Labour Cost: {currency} {total_labour:,.2f}")
+    
+    # Third Party Items Table
+    df = st.session_state[THIRD_PARTY_KEY].copy()
+    
+    # Editable columns
+    col1, col2, col3, col4, col5 = st.columns([2, 3, 1.5, 1.5, 2])
     with col1:
+        st.markdown("**Category**")
+    with col2:
+        st.markdown("**Description**")
+    with col3:
+        st.markdown("**Basis**")
+    with col4:
+        st.markdown("**% / Amount**")
+    with col5:
+        st.markdown("**Remarks**")
+    
+    # Display editable rows
+    for idx, row in df.iterrows():
+        col1, col2, col3, col4, col5 = st.columns([2, 3, 1.5, 1.5, 2])
+        
+        with col1:
+            df.loc[idx, "Category"] = st.selectbox(
+                f"cat_{idx}",
+                THIRD_PARTY_CATEGORIES,
+                index=THIRD_PARTY_CATEGORIES.index(row["Category"]) if row["Category"] in THIRD_PARTY_CATEGORIES else 0,
+                label_visibility="collapsed",
+                key=f"cat_{idx}"
+            )
+        
+        with col2:
+            df.loc[idx, "Description"] = st.text_input(
+                f"desc_{idx}",
+                value=row["Description"],
+                label_visibility="collapsed",
+                placeholder="Description",
+                key=f"desc_{idx}"
+            )
+        
+        with col3:
+            basis_options = ["% of Labour Cost", "Fixed Amount"]
+            df.loc[idx, "Basis"] = st.selectbox(
+                f"basis_{idx}",
+                basis_options,
+                index=basis_options.index(row["Basis"]) if row["Basis"] in basis_options else 0,
+                label_visibility="collapsed",
+                key=f"basis_{idx}"
+            )
+        
+        with col4:
+            if df.loc[idx, "Basis"] == "% of Labour Cost":
+                df.loc[idx, "Percentage"] = st.number_input(
+                    f"pct_{idx}",
+                    min_value=0.0,
+                    max_value=100.0,
+                    value=float(row["Percentage"]),
+                    step=0.1,
+                    format="%.1f",
+                    label_visibility="collapsed",
+                    key=f"pct_{idx}"
+                )
+                # Clear fixed amount when using percentage
+                df.loc[idx, "Fixed Amount"] = 0.0
+            else:
+                df.loc[idx, "Fixed Amount"] = st.number_input(
+                    f"amt_{idx}",
+                    min_value=0.0,
+                    value=float(row["Fixed Amount"]),
+                    step=100.0,
+                    format="%.2f",
+                    label_visibility="collapsed",
+                    key=f"amt_{idx}"
+                )
+                # Clear percentage when using fixed amount
+                df.loc[idx, "Percentage"] = 0.0
+        
+        with col5:
+            df.loc[idx, "Remarks"] = st.text_input(
+                f"rem_{idx}",
+                value=row["Remarks"],
+                label_visibility="collapsed",
+                placeholder="Remarks",
+                key=f"rem_{idx}"
+            )
+    
+    st.session_state[THIRD_PARTY_KEY] = df
+    
+    # Add/Remove rows
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col1:
+        if st.button("➕ Add Item", use_container_width=True):
+            new_row = pd.DataFrame([{
+                "Category": THIRD_PARTY_CATEGORIES[0],
+                "Description": "",
+                "Basis": "% of Labour Cost",
+                "Percentage": 0.0,
+                "Fixed Amount": 0.0,
+                "Remarks": ""
+            }])
+            st.session_state[THIRD_PARTY_KEY] = pd.concat([df, new_row], ignore_index=True)
+            do_rerun()
+    
+    with col2:
+        if st.button("🗑️ Remove Last Item", use_container_width=True) and len(df) > 0:
+            st.session_state[THIRD_PARTY_KEY] = df.iloc[:-1].reset_index(drop=True)
+            do_rerun()
+    
+    with col3:
+        if st.button("📅 Next: Monthly Loading", use_container_width=True):
+            st.session_state["page"] = "LOADING"
+            do_rerun()
+    
+    # Calculate and display third party costs
+    if len(df) > 0:
+        st.subheader("Calculated Costs")
+        third_party_costs = calculate_third_party_costs(df, total_labour, currency)
+        
+        # Display costs table
+        cost_display = third_party_costs.copy()
+        cost_display[f"Cost ({currency})"] = cost_display[f"Cost ({currency})"].apply(lambda x: f"{x:,.2f}")
+        st.dataframe(cost_display, use_container_width=True)
+        
+        total_third_party = third_party_costs[f"Cost ({currency})"].sum()
         st.markdown(
             f"""
-            <div class="metric-card">
-                <h3>Total Manhour</h3>
-                <div class="value">{total_manhour:,.0f}</div>
-                <div class="subvalue">person-hours</div>
+            <div style="background: var(--surface-alt); padding: 1rem; border-radius: 10px; margin-top: 1rem;">
+                <h3 style="margin: 0; color: var(--brand1);">Total Third Party Cost: {currency} {total_third_party:,.2f}</h3>
             </div>
             """,
             unsafe_allow_html=True
+        )
+
+
+def render_loading():
+    st.header("📅 Monthly Loading")
+    st.caption("Configure monthly loading factors and weightage distribution")
+    
+    currency = currency_for(st.session_state["type_of_schedule"])
+    
+    # Get current costs
+    labour_df = calculate_labour_costs(
+        st.session_state[GRID_KEY], 
+        currency, 
+        st.session_state["rate_source"], 
+        st.session_state["type_of_schedule"]
+    )
+    total_labour = labour_df[f"Labour Cost ({currency})"].sum() if not labour_df.empty else 0
+    
+    third_party_df = calculate_third_party_costs(
+        st.session_state[THIRD_PARTY_KEY], 
+        total_labour, 
+        currency
+    )
+    
+    df = st.session_state[MONTHLY_LOADING_KEY].copy()
+    
+    # Month configuration
+    st.subheader("Monthly Distribution")
+    
+    col1, col2, col3 = st.columns([2, 1, 2])
+    with col1:
+        num_months = st.number_input(
+            "Number of Months",
+            min_value=1,
+            max_value=60,
+            value=len(df),
+            step=1,
+            help="Adjust project duration in months"
         )
     
     with col2:
-        st.markdown(
-            f"""
-            <div class="metric-card">
-                <h3>Average Unit Rate</h3>
-                <div class="value">{avg_rate:,.2f}</div>
-                <div class="subvalue">{currency}/hour</div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
+        st.markdown("<br/>", unsafe_allow_html=True)
+        if st.button("Update", use_container_width=True):
+            if num_months != len(df):
+                # Resize the dataframe
+                months = [f"Month {i+1:02d}" for i in range(num_months)]
+                if num_months > len(df):
+                    # Add more months with default values
+                    additional = pd.DataFrame({
+                        "Month": months[len(df):],
+                        "Loading Factor (%)": [100.0] * (num_months - len(df)),
+                        "Weightage Distribution": [100.0/num_months] * (num_months - len(df))
+                    })
+                    df = pd.concat([df.iloc[:len(df)], additional], ignore_index=True)
+                else:
+                    # Remove months
+                    df = df.iloc[:num_months].reset_index(drop=True)
+                
+                # Rebalance weightage distribution
+                total_weight = df["Weightage Distribution"].sum()
+                if total_weight != 100:
+                    df["Weightage Distribution"] = 100.0 / num_months
+                
+                st.session_state[MONTHLY_LOADING_KEY] = df
+                do_rerun()
     
     with col3:
-        st.markdown(
-            f"""
-            <div class="metric-card">
-                <h3>Method A — Avg × MH</h3>
-                <div class="value">{total_by_average:,.2f}</div>
-                <div class="subvalue">{currency}</div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
+        st.info("Loading factors multiply the cost for each month")
     
-    with col4:
-        st.markdown(
-            f"""
-            <div class="metric-card">
-                <h3>Method B — Exact</h3>
-                <div class="value">{total_exact:,.2f}</div>
-                <div class="subvalue">{currency}</div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
+    # Display monthly table
+    st.subheader("Monthly Factors")
     
-    st.caption("Method A: average of non-zero unit rates × total manhour. Method B: exact sum of line items.")
-
-    st.markdown("<br/>", unsafe_allow_html=True)
-    c3, c4 = st.columns([1, 1])
-    with c3:
-        if st.button("💾 Save for Comparison", use_container_width=True):
-            saved_project = save_current_project()
-            st.success(f"Project '{saved_project['name']}' saved for comparison!")
+    # Create editable columns for each month
+    for idx, row in df.iterrows():
+        col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 2, 2])
+        
+        with col1:
+            st.write(f"**{row['Month']}**")
+        
+        with col2:
+            df.loc[idx, "Loading Factor (%)"] = st.number_input(
+                f"load_{idx}",
+                min_value=0.0,
+                max_value=200.0,
+                value=float(row["Loading Factor (%)"]),
+                step=5.0,
+                format="%.1f",
+                label_visibility="collapsed",
+                key=f"load_{idx}"
+            )
+        
+        with col3:
+            df.loc[idx, "Weightage Distribution"] = st.number_input(
+                f"weight_{idx}",
+                min_value=0.0,
+                max_value=100.0,
+                value=float(row["Weightage Distribution"]),
+                step=0.1,
+                format="%.1f",
+                label_visibility="collapsed",
+                key=f"weight_{idx}"
+            )
+        
+        # Calculate effective loading
+        effective = (df.loc[idx, "Loading Factor (%)"] / 100.0) * (df.loc[idx, "Weightage Distribution"] / 100.0) * 100
+        with col4:
+            st.metric("Effective %", f"{effective:.1f}%")
+        
+        # Preview cost for this month
+        month_cost = total_labour * (df.loc[idx, "Weightage Distribution"] / 100.0) * (df.loc[idx, "Loading Factor (%)"] / 100.0)
+        with col5:
+            st.write(f"{currency} {month_cost:,.0f}")
+    
+    # Validate weightage sum
+    total_weight = df["Weightage Distribution"].sum()
+    if abs(total_weight - 100.0) > 0.01:
+        st.warning(f"Weightage Distribution total is {total_weight:.1f}%. Should be 100% for accurate distribution.")
+    
+    st.session_state[MONTHLY_LOADING_KEY] = df
+    
+    # Preview monthly breakdown
+    st.subheader("Monthly Cost Preview")
+    
+    monthly_breakdown = apply_monthly_loading(labour_df, third_party_df, df, currency)
+    
+    # Create preview table
+    preview_data = []
+    for month in monthly_breakdown["months"]:
+        preview_data.append({
+            "Month": month,
+            f"Labour ({currency})": monthly_breakdown["monthly_labour"][month],
+            f"Third Party ({currency})": monthly_breakdown["monthly_third_party"][month],
+            f"Total ({currency})": monthly_breakdown["total_by_month"][month]
+        })
+    
+    preview_df = pd.DataFrame(preview_data)
+    
+    # Format for display
+    display_preview = preview_df.copy()
+    for col in display_preview.columns[1:]:
+        display_preview[col] = display_preview[col].apply(lambda x: f"{x:,.2f}")
+    
+    st.dataframe(display_preview, use_container_width=True)
+    
+    # Navigation
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col1:
+        if st.button("⬅️ Back to Third Party", use_container_width=True):
+            st.session_state["page"] = "THIRD_PARTY"
             do_rerun()
-    with c4:
-        if st.button("➡️ Go to Totals & Line Items", use_container_width=True, type="primary"):
+    with col2:
+        if st.button("📊 Go to Totals", use_container_width=True, type="primary"):
             st.session_state["page"] = "TOTALS"
+            do_rerun()
+    with col3:
+        if st.button("↺ Reset to Default", use_container_width=True):
+            months = [f"Month {i+1:02d}" for i in range(12)]
+            default_df = pd.DataFrame({
+                "Month": months,
+                "Loading Factor (%)": [100.0] * 12,
+                "Weightage Distribution": [100.0/12] * 12
+            })
+            st.session_state[MONTHLY_LOADING_KEY] = default_df
             do_rerun()
 
 
@@ -1536,31 +1901,28 @@ def render_totals():
     type_of_schedule = st.session_state["type_of_schedule"]
     rate_source = st.session_state["rate_source"]
     currency = currency_for(type_of_schedule)
+    kpbi_rate = st.session_state["kpbi_rate"]
 
-    df_out = compute_line_items(st.session_state[GRID_KEY], currency, rate_source, type_of_schedule)
-    total_manhour, avg_rate, total_by_average, total_exact, totals = compute_totals(df_out, currency)
+    # Calculate all costs
+    labour_df = calculate_labour_costs(st.session_state[GRID_KEY], currency, rate_source, type_of_schedule)
+    total_labour = float(labour_df[f"Labour Cost ({currency})"].sum()) if not labour_df.empty else 0.0
+    
+    third_party_df = calculate_third_party_costs(st.session_state[THIRD_PARTY_KEY], total_labour, currency)
+    totals = compute_totals(labour_df, third_party_df, st.session_state[MONTHLY_LOADING_KEY], currency, kpbi_rate)
 
-    # Summary metrics at top
+    # Summary metrics with Method A (Exact) and Method B (KPBI)
     st.markdown(
         f"""
         <div class="summary-card">
             <h2 style="color: var(--brand1); margin-top: 0;">Project Summary</h2>
             <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 1.5rem;">
                 <div>
-                    <h3 style="color: var(--text-muted); margin-bottom: 0.5rem; font-size: 0.9rem;">Total Cost ({currency})</h3>
-                    <div style="font-size: 2.2rem; font-weight: 700; color: var(--text);">{total_exact:,.2f}</div>
-                </div>
-                <div>
                     <h3 style="color: var(--text-muted); margin-bottom: 0.5rem; font-size: 0.9rem;">Total Manhours</h3>
-                    <div style="font-size: 2.2rem; font-weight: 700; color: var(--text);">{total_manhour:,.0f}</div>
+                    <div style="font-size: 2.2rem; font-weight: 700; color: var(--text);">{totals['total_hours']:,.0f}</div>
                 </div>
                 <div>
-                    <h3 style="color: var(--text-muted); margin-bottom: 0.5rem; font-size: 0.9rem;">Average Rate</h3>
-                    <div style="font-size: 1.5rem; font-weight: 600; color: var(--brand2);">{avg_rate:,.2f} {currency}/hour</div>
-                </div>
-                <div>
-                    <h3 style="color: var(--text-muted); margin-bottom: 0.5rem; font-size: 0.9rem;">Disciplines</h3>
-                    <div style="font-size: 1.5rem; font-weight: 600; color: var(--brand2);">{totals.shape[0]}</div>
+                    <h3 style="color: var(--text-muted); margin-bottom: 0.5rem; font-size: 0.9rem;">KPBI Rate</h3>
+                    <div style="font-size: 2.2rem; font-weight: 700; color: var(--text);">{kpbi_rate:,.2f} {currency}/hr</div>
                 </div>
             </div>
         </div>
@@ -1568,129 +1930,151 @@ def render_totals():
         unsafe_allow_html=True
     )
 
-    # Visualizations
+    # Method comparison cards
     col1, col2 = st.columns(2)
     
     with col1:
-        if not totals.empty:
-            # Bar chart for totals by discipline
-            fig = px.bar(
-                totals.sort_values(f"Total Price ({currency})", ascending=True),
-                y="Discipline",
-                x=f"Total Price ({currency})",
-                orientation='h',
-                color="Discipline",
-                color_discrete_map={d: f"#{DISCIPLINE_COLORS.get(d, 'D1D5DB')}" for d in totals["Discipline"]},
-                title=f"Cost by Discipline ({currency})",
-                height=400
-            )
-            fig.update_layout(
-                showlegend=False,
-                plot_bgcolor='rgba(0,0,0,0)',
-                paper_bgcolor='rgba(0,0,0,0)',
-                font=dict(size=12),
-                margin=dict(l=10, r=10, t=40, b=10),
-                xaxis=dict(
-                    title=f"Total Price ({currency})",
-                    tickformat=",.0f",
-                    gridcolor='rgba(0,0,0,0.1)'
-                ),
-                yaxis=dict(
-                    title=None,
-                    categoryorder='total ascending'
-                )
-            )
-            st.plotly_chart(fig, use_container_width=True)
+        st.markdown(
+            f"""
+            <div class="metric-card">
+                <h3>🔵 METHOD A — EXACT TOTAL</h3>
+                <div class="value">{totals['total_exact']:,.2f} {currency}</div>
+                <div class="subvalue">
+                    Labour: {totals['total_labour_exact']:,.2f} {currency}<br/>
+                    Third Party: {totals['total_third_party']:,.2f} {currency}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
     
     with col2:
-        if not totals.empty and totals.shape[0] > 1:
-            # Donut chart for cost distribution
-            fig = px.pie(
-                totals,
-                values=f"Total Price ({currency})",
-                names="Discipline",
-                hole=0.4,
-                title="Cost Distribution by Discipline",
-                height=400,
-                color="Discipline",
-                color_discrete_map={d: f"#{DISCIPLINE_COLORS.get(d, 'D1D5DB')}" for d in totals["Discipline"]}
-            )
-            fig.update_traces(
-                textposition='inside',
-                textinfo='percent+label',
-                hovertemplate="<b>%{label}</b><br>%{value:,.0f} " + currency + "<br>%{percent}"
-            )
-            fig.update_layout(
-                showlegend=False,
-                plot_bgcolor='rgba(0,0,0,0)',
-                paper_bgcolor='rgba(0,0,0,0)',
-                font=dict(size=12),
-                margin=dict(l=10, r=10, t=40, b=10)
-            )
-            st.plotly_chart(fig, use_container_width=True)
-
-    # Detailed totals table
-    st.subheader("Totals by Discipline")
-    
-    if not totals.empty:
-        # Format the totals for display
-        display_totals = totals.copy()
-        display_totals["Manhour"] = display_totals["Manhour"].apply(lambda x: f"{x:,.0f}")
-        display_totals[f"Total Price ({currency})"] = display_totals[f"Total Price ({currency})"].apply(lambda x: f"{x:,.2f}")
-        
-        st.dataframe(
-            display_totals,
-            use_container_width=True,
-            column_config={
-                "Discipline": st.column_config.TextColumn("Discipline", width="medium"),
-                "Manhour": st.column_config.TextColumn("Manhour", width="small"),
-                f"Total Price ({currency})": st.column_config.TextColumn(f"Total Price ({currency})", width="medium"),
-            },
-            hide_index=True
-        )
-    
-    # Line items table
-    st.subheader("Line Items")
-    
-    if not df_out.empty:
-        # Format line items for display
-        display_line_items = df_out.copy()
-        display_line_items[f"Unit Rate ({currency})"] = display_line_items[f"Unit Rate ({currency})"].apply(lambda x: f"{x:,.2f}")
-        display_line_items["Total Hours"] = display_line_items["Total Hours"].apply(lambda x: f"{x:,.2f}")
-        display_line_items[f"Total Cost ({currency})"] = display_line_items[f"Total Cost ({currency})"].apply(lambda x: f"{x:,.2f}")
-        
-        st.dataframe(
-            display_line_items,
-            use_container_width=True,
-            column_config={
-                "Discipline": st.column_config.TextColumn("Discipline", width="small"),
-                "Personnel": st.column_config.TextColumn("Personnel", width="medium"),
-                "Category": st.column_config.TextColumn("Category", width="small"),
-                "Type of Unit Rate": st.column_config.TextColumn("Rate Type", width="small"),
-                "Rate Source": st.column_config.TextColumn("Source", width="small"),
-                f"Unit Rate ({currency})": st.column_config.TextColumn(f"Rate ({currency})", width="small"),
-                "Weightage (FTE)": st.column_config.NumberColumn("Weightage", format="%.1f", width="small"),
-                "Duration (months)": st.column_config.NumberColumn("Duration", format="%d", width="small"),
-                "Total Hours": st.column_config.TextColumn("Hours", width="small"),
-                f"Total Cost ({currency})": st.column_config.TextColumn(f"Cost ({currency})", width="medium"),
-            },
-            hide_index=True
+        st.markdown(
+            f"""
+            <div class="metric-card">
+                <h3>🟢 METHOD B — KPBI RATE</h3>
+                <div class="value">{totals['total_kpbi']:,.2f} {currency}</div>
+                <div class="subvalue">
+                    Labour (KPBI): {totals['total_labour_kpbi']:,.2f} {currency}<br/>
+                    Third Party: {totals['total_third_party']:,.2f} {currency}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True
         )
 
+    # Labour cost breakdown
+    st.subheader("Labour Cost Breakdown by Discipline")
+    
+    if not totals["discipline_totals"].empty:
+        # Format for display
+        display_discipline = totals["discipline_totals"].copy()
+        display_discipline["Manhour"] = display_discipline["Manhour"].apply(lambda x: f"{x:,.0f}")
+        display_discipline[f"Labour Cost ({currency})"] = display_discipline[f"Labour Cost ({currency})"].apply(lambda x: f"{x:,.2f}")
+        
+        st.dataframe(
+            display_discipline,
+            use_container_width=True,
+            hide_index=True
+        )
+        
+        # Bar chart
+        fig = px.bar(
+            totals["discipline_totals"].sort_values(f"Labour Cost ({currency})", ascending=True),
+            y="Discipline",
+            x=f"Labour Cost ({currency})",
+            orientation='h',
+            color="Discipline",
+            color_discrete_map={d: f"#{DISCIPLINE_COLORS.get(d, 'D1D5DB')}" for d in totals["discipline_totals"]["Discipline"]},
+            title=f"Labour Cost by Discipline ({currency})",
+            height=400
+        )
+        fig.update_layout(
+            showlegend=False,
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)',
+            margin=dict(l=10, r=10, t=40, b=10)
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    
+    # Third Party Costs
+    st.subheader("Third Party & Non-Labour Costs")
+    if not third_party_df.empty:
+        display_tp = third_party_df.copy()
+        display_tp[f"Cost ({currency})"] = display_tp[f"Cost ({currency})"].apply(lambda x: f"{x:,.2f}")
+        st.dataframe(display_tp, use_container_width=True, hide_index=True)
+    
+    # Monthly Breakdown
+    st.subheader("Monthly Cost Breakdown")
+    
+    monthly_breakdown = totals["monthly_breakdown"]
+    if monthly_breakdown["months"]:
+        # Create line chart for monthly costs
+        monthly_data = []
+        for month in monthly_breakdown["months"]:
+            monthly_data.append({
+                "Month": month,
+                "Labour": monthly_breakdown["monthly_labour"][month],
+                "Third Party": monthly_breakdown["monthly_third_party"][month],
+                "Total": monthly_breakdown["total_by_month"][month]
+            })
+        
+        monthly_df = pd.DataFrame(monthly_data)
+        
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=monthly_df["Month"],
+            y=monthly_df["Labour"],
+            mode='lines+markers',
+            name=f'Labour ({currency})',
+            line=dict(color=BRAND1, width=3)
+        ))
+        fig.add_trace(go.Scatter(
+            x=monthly_df["Month"],
+            y=monthly_df["Third Party"],
+            mode='lines+markers',
+            name=f'Third Party ({currency})',
+            line=dict(color=BRAND2, width=3)
+        ))
+        fig.add_trace(go.Scatter(
+            x=monthly_df["Month"],
+            y=monthly_df["Total"],
+            mode='lines+markers',
+            name=f'Total ({currency})',
+            line=dict(color="#F59E0B", width=4, dash='dot')
+        ))
+        
+        fig.update_layout(
+            title="Monthly Cost Distribution",
+            xaxis_title="Month",
+            yaxis_title=f"Cost ({currency})",
+            hovermode='x unified',
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)',
+            height=400
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+    
+    # Navigation
     st.markdown("<br/>", unsafe_allow_html=True)
-    c1, c2, c3 = st.columns([1, 1, 1])
-    with c1:
-        if st.button("⬅️ Back to Personnel Table", use_container_width=True):
-            st.session_state["page"] = "TABLE"
+    col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
+    with col1:
+        if st.button("⬅️ Back to Loading", use_container_width=True):
+            st.session_state["page"] = "LOADING"
             do_rerun()
-    with c2:
-        if st.button("💾 Save for Comparison", use_container_width=True, type="primary"):
+    with col2:
+        if st.button("💾 Save for Comparison", use_container_width=True):
             saved_project = save_current_project()
             st.success(f"Project '{saved_project['name']}' saved for comparison!")
             do_rerun()
-    with c3:
-        if st.button("➡️ Go to Summary & Download", use_container_width=True):
+    with col3:
+        if st.button("📈 Go to Summary", use_container_width=True, type="primary"):
             st.session_state["page"] = "SUMMARY"
+            do_rerun()
+    with col4:
+        if st.button("🔄 Compare", use_container_width=True):
+            st.session_state["page"] = "COMPARE"
             do_rerun()
 
 
@@ -1698,6 +2082,7 @@ def render_summary():
     type_of_schedule = st.session_state["type_of_schedule"]
     rate_source = st.session_state["rate_source"]
     currency = currency_for(type_of_schedule)
+    kpbi_rate = st.session_state["kpbi_rate"]
 
     main_meta = pd.DataFrame(
         [
@@ -1710,117 +2095,130 @@ def render_summary():
                 "Type of Schedule": st.session_state["type_of_schedule"],
                 "Rate Source Used": rate_source,
                 "Currency": currency,
+                "KPBI Rate": kpbi_rate,
                 "Hours per Month (constant)": HOURS_PER_MONTH,
             }
         ]
     )
 
-    df_out = compute_line_items(st.session_state[GRID_KEY], currency, rate_source, type_of_schedule)
-    _, _, _, _, totals = compute_totals(df_out, currency)
+    # Calculate all costs
+    labour_df = calculate_labour_costs(st.session_state[GRID_KEY], currency, rate_source, type_of_schedule)
+    total_labour = float(labour_df[f"Labour Cost ({currency})"].sum()) if not labour_df.empty else 0.0
+    
+    third_party_df = calculate_third_party_costs(st.session_state[THIRD_PARTY_KEY], total_labour, currency)
+    totals = compute_totals(labour_df, third_party_df, st.session_state[MONTHLY_LOADING_KEY], currency, kpbi_rate)
 
     st.subheader("Main Page (entered)")
     st.dataframe(main_meta, use_container_width=True)
 
-    # =========================
-    # Visuals (colored)
-    # =========================
-    if not df_out.empty:
-        # Build color map for disciplines from XLSX tint palette
-        discipline_color_map = {d: f"#{DISCIPLINE_COLORS.get(d, 'D1D5DB')}" for d in df_out["Discipline"].unique()}
-
-        st.subheader("Visual Summary")
-
-        # Chart 1: Total Price by Discipline (Bar)
-        totals_disp = (
-            df_out.groupby("Discipline", as_index=False)[f"Total Cost ({currency})"]
-            .sum()
-            .sort_values(by=f"Total Cost ({currency})", ascending=False)
+    # Method comparison
+    st.subheader("Cost Comparison: Method A vs Method B")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        fig = go.Figure(data=[
+            go.Bar(name='Method A (Exact)', x=['Total Cost'], y=[totals['total_exact']], marker_color=BRAND1),
+            go.Bar(name='Method B (KPBI)', x=['Total Cost'], y=[totals['total_kpbi']], marker_color=BRAND2)
+        ])
+        fig.update_layout(
+            title="Method Comparison",
+            yaxis_title=f"Cost ({currency})",
+            barmode='group',
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)',
+            height=400
         )
-        # Round to reduce payload
-        totals_disp[f"Total Cost ({currency})"] = totals_disp[f"Total Cost ({currency})"].round(2)
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with col2:
+        # Pie chart for cost components (Method A)
+        fig = px.pie(
+            values=[totals['total_labour_exact'], totals['total_third_party']],
+            names=['Labour Cost', 'Third Party'],
+            title="Cost Components (Method A)",
+            color_discrete_sequence=[BRAND1, BRAND2],
+            hole=0.4
+        )
+        fig.update_traces(textposition='inside', textinfo='percent+label')
+        fig.update_layout(
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)',
+            height=400
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
-        fig_bar = px.bar(
-            totals_disp,
-            x=f"Total Cost ({currency})",
+    # Labour cost breakdown
+    if not labour_df.empty:
+        st.subheader("Labour Cost Breakdown")
+        
+        # Group by discipline for visualization
+        disc_summary = labour_df.groupby("Discipline").agg({
+            "Total Hours": "sum",
+            f"Labour Cost ({currency})": "sum"
+        }).reset_index()
+        
+        # Sort by cost
+        disc_summary = disc_summary.sort_values(f"Labour Cost ({currency})", ascending=True)
+        
+        fig = px.bar(
+            disc_summary,
             y="Discipline",
-            orientation="h",
+            x=f"Labour Cost ({currency})",
+            orientation='h',
             color="Discipline",
-            color_discrete_map=discipline_color_map,
-            hover_data=None,
-            title=f"Total Price by Discipline ({currency})",
+            title=f"Labour Cost by Discipline ({currency})",
+            height=max(400, len(disc_summary) * 30)
         )
-        fig_bar.update_layout(
-            title_x=0.0,
-            plot_bgcolor="rgba(0,0,0,0)",
-            paper_bgcolor="rgba(0,0,0,0)",
-            font=dict(size=13),
-            margin=dict(l=10, r=10, t=48, b=10),
+        fig.update_layout(
+            showlegend=False,
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)'
         )
-        st.plotly_chart(fig_bar, use_container_width=True)
-
-        # Chart 2: Cost Share by Category (Donut)
-        cat_disp = (
-            df_out.groupby("Category", as_index=False)[f"Total Cost ({currency})"]
-            .sum()
-            .sort_values(by=f"Total Cost ({currency})", ascending=False)
-        )
-        if not cat_disp.empty:
-            brand_seq = [BRAND1, BRAND2, "#14B8A6", "#60A5FA", "#A78BFA", "#F59E0B", "#EF4444"]
-            fig_donut = px.pie(
-                cat_disp,
-                values=f"Total Cost ({currency})",
-                names="Category",
-                hole=0.45,
-                color="Category",
-                color_discrete_sequence=brand_seq,
-                title=f"Cost Share by Category ({currency})",
-            )
-            fig_donut.update_traces(textposition="inside", textinfo="percent+label", hovertemplate="%{label}<br>%{value:,.2f}")
-            fig_donut.update_layout(
-                title_x=0.0,
-                showlegend=True,
-                legend_title_text="Category",
-                margin=dict(l=10, r=10, t=48, b=10),
-                plot_bgcolor="rgba(0,0,0,0)",
-                paper_bgcolor="rgba(0,0,0,0)",
-            )
-            st.plotly_chart(fig_donut, use_container_width=True)
-
-        st.caption("Tips: Use the Personnel Table to adjust Weightage/Duration and see instant visual updates here.")
+        st.plotly_chart(fig, use_container_width=True)
 
     # Download
-    excel_blob = to_excel_bytes(main_meta, totals, df_out, schedule_label=type_of_schedule, currency=currency)
+    excel_blob = to_excel_bytes(
+        main_meta, 
+        totals, 
+        labour_df, 
+        third_party_df, 
+        st.session_state[MONTHLY_LOADING_KEY],
+        schedule_label=type_of_schedule, 
+        currency=currency
+    )
+    
     try:
         st.download_button(
-            "⬇️ Download Summary (Excel)",
+            "⬇️ Download Complete Report (Excel)",
             data=excel_blob,
-            file_name="MEC_TOOL_Output.xlsx",
+            file_name=f"MEC_TOOL_{st.session_state['project_title'] or 'Output'}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             type="primary",
-            help="Main Page, Working Page (tinted & subtotals), and Summary — styled & currency-aware",
+            help="Complete report with all sheets: Main Page, Labour Costs, Third Party, Monthly Loading",
             use_container_width=True
         )
     except TypeError:
         st.download_button(
-            "⬇️ Download Summary (Excel)",
+            "⬇️ Download Complete Report (Excel)",
             data=excel_blob,
-            file_name="MEC_TOOL_Output.xlsx",
+            file_name=f"MEC_TOOL_{st.session_state['project_title'] or 'Output'}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            help="Main Page, Working Page (tinted & subtotals), and Summary — styled & currency-aware",
+            help="Complete report with all sheets: Main Page, Labour Costs, Third Party, Monthly Loading",
             use_container_width=True
         )
 
-    c1, c2, c3 = st.columns([1, 1, 1])
-    with c1:
+    # Navigation
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col1:
         if st.button("⬅️ Back to Totals", use_container_width=True):
             st.session_state["page"] = "TOTALS"
             do_rerun()
-    with c2:
-        if st.button("💾 Save for Comparison", use_container_width=True, type="primary"):
+    with col2:
+        if st.button("💾 Save for Comparison", use_container_width=True):
             saved_project = save_current_project()
             st.success(f"Project '{saved_project['name']}' saved for comparison!")
             do_rerun()
-    with c3:
+    with col3:
         if st.button("🔄 Compare Projects", use_container_width=True):
             st.session_state["page"] = "COMPARE"
             do_rerun()
@@ -1892,16 +2290,16 @@ def render_compare():
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            manhour_change = comparison["manhour_pct"]
-            manhour_badge = "up" if manhour_change > 5 else "down" if manhour_change < -5 else "neutral"
+            hours_change = comparison["hours_pct"]
+            hours_badge = "up" if hours_change > 5 else "down" if hours_change < -5 else "neutral"
             st.markdown(
                 f"""
                 <div class="metric-card">
                     <h3>Manhour Change</h3>
-                    <div class="value">{comparison["manhour_diff"]:+,.0f}</div>
+                    <div class="value">{comparison["hours_diff"]:+,.0f}</div>
                     <div class="subvalue">
-                        <span class="comparison-badge {manhour_badge}">
-                            {comparison["manhour_pct"]:+.1f}%
+                        <span class="comparison-badge {hours_badge}">
+                            {comparison["hours_pct"]:+.1f}%
                         </span>
                     </div>
                 </div>
@@ -1910,16 +2308,16 @@ def render_compare():
             )
         
         with col2:
-            cost_change = comparison["cost_pct"]
-            cost_badge = "up" if cost_change > 5 else "down" if cost_change < -5 else "neutral"
+            exact_change = comparison["exact_cost_pct"]
+            exact_badge = "up" if exact_change > 5 else "down" if exact_change < -5 else "neutral"
             st.markdown(
                 f"""
                 <div class="metric-card">
-                    <h3>Cost Change</h3>
-                    <div class="value">{comparison["cost_diff"]:+,.2f} {project2['currency']}</div>
+                    <h3>Method A (Exact) Change</h3>
+                    <div class="value">{comparison["exact_cost_diff"]:+,.2f} {project2['currency']}</div>
                     <div class="subvalue">
-                        <span class="comparison-badge {cost_badge}">
-                            {comparison["cost_pct"]:+.1f}%
+                        <span class="comparison-badge {exact_badge}">
+                            {comparison["exact_cost_pct"]:+.1f}%
                         </span>
                     </div>
                 </div>
@@ -1928,120 +2326,22 @@ def render_compare():
             )
         
         with col3:
-            rate_change = comparison["avg_rate_pct"]
-            rate_badge = "up" if rate_change > 5 else "down" if rate_change < -5 else "neutral"
+            kpbi_change = comparison["kpbi_cost_pct"]
+            kpbi_badge = "up" if kpbi_change > 5 else "down" if kpbi_change < -5 else "neutral"
             st.markdown(
                 f"""
                 <div class="metric-card">
-                    <h3>Avg Rate Change</h3>
-                    <div class="value">{comparison["avg_rate_diff"]:+,.2f} {project2['currency']}/hr</div>
+                    <h3>Method B (KPBI) Change</h3>
+                    <div class="value">{comparison["kpbi_cost_diff"]:+,.2f} {project2['currency']}</div>
                     <div class="subvalue">
-                        <span class="comparison-badge {rate_badge}">
-                            {comparison["avg_rate_pct"]:+.1f}%
+                        <span class="comparison-badge {kpbi_badge}">
+                            {comparison["kpbi_cost_pct"]:+.1f}%
                         </span>
                     </div>
                 </div>
                 """,
                 unsafe_allow_html=True
             )
-        
-        # Detailed comparison table
-        st.subheader("Discipline-wise Comparison")
-        
-        if comparison["discipline_comparison"]:
-            comp_df = pd.DataFrame(comparison["discipline_comparison"])
-            
-            # Clean up column names
-            comp_df.columns = [col.replace(f"Total Price ({project1['currency']})_1", f"Cost_1 ({project1['currency']})")
-                              .replace(f"Total Price ({project2['currency']})_2", f"Cost_2 ({project2['currency']})")
-                              for col in comp_df.columns]
-            
-            # Calculate percentage changes
-            comp_df["Manhour_Change_Pct"] = ((comp_df["Manhour_2"] - comp_df["Manhour_1"]) / comp_df["Manhour_1"].replace(0, 1)) * 100
-            comp_df["Cost_Change_Pct"] = ((comp_df[f"Cost_2 ({project2['currency']})"] - comp_df[f"Cost_1 ({project1['currency']})"]) / 
-                                        comp_df[f"Cost_1 ({project1['currency']})"].replace(0, 1)) * 100
-            
-            # Format for display
-            display_df = comp_df[["Discipline", "Manhour_1", "Manhour_2", "Manhour_Diff", "Manhour_Change_Pct",
-                                 f"Cost_1 ({project1['currency']})", f"Cost_2 ({project2['currency']})", 
-                                 "Cost_Diff", "Cost_Change_Pct"]].copy()
-            
-            # Format numeric columns
-            for col in ["Manhour_1", "Manhour_2", "Manhour_Diff"]:
-                display_df[col] = display_df[col].apply(lambda x: f"{x:,.0f}")
-            
-            for col in [f"Cost_1 ({project1['currency']})", f"Cost_2 ({project2['currency']})", "Cost_Diff"]:
-                display_df[col] = display_df[col].apply(lambda x: f"{x:,.2f}")
-            
-            display_df["Manhour_Change_Pct"] = display_df["Manhour_Change_Pct"].apply(lambda x: f"{x:+.1f}%")
-            display_df["Cost_Change_Pct"] = display_df["Cost_Change_Pct"].apply(lambda x: f"{x:+.1f}%")
-            
-            st.dataframe(
-                display_df,
-                use_container_width=True,
-                column_config={
-                    "Discipline": st.column_config.TextColumn("Discipline", width="small"),
-                    "Manhour_1": st.column_config.TextColumn(f"{project1['name'][:10]}... MH", width="small"),
-                    "Manhour_2": st.column_config.TextColumn(f"{project2['name'][:10]}... MH", width="small"),
-                    "Manhour_Diff": st.column_config.TextColumn("MH Diff", width="small"),
-                    "Manhour_Change_Pct": st.column_config.TextColumn("MH %", width="small"),
-                    f"Cost_1 ({project1['currency']})": st.column_config.TextColumn(f"{project1['name'][:10]}... Cost", width="medium"),
-                    f"Cost_2 ({project2['currency']})": st.column_config.TextColumn(f"{project2['name'][:10]}... Cost", width="medium"),
-                    "Cost_Diff": st.column_config.TextColumn("Cost Diff", width="medium"),
-                    "Cost_Change_Pct": st.column_config.TextColumn("Cost %", width="small"),
-                },
-                hide_index=True
-            )
-        
-        # Visualization
-        st.subheader("Visual Comparison")
-        
-        if comparison["discipline_comparison"]:
-            comp_df = pd.DataFrame(comparison["discipline_comparison"])
-            
-            # Create comparison bar chart
-            fig = go.Figure()
-            
-            # Add bars for project 1
-            fig.add_trace(go.Bar(
-                name=project1['name'][:20],
-                y=comp_df['Discipline'],
-                x=comp_df[f'Total Price ({project1["currency"]})_1'],
-                orientation='h',
-                marker_color=BRAND1,
-                opacity=0.7
-            ))
-            
-            # Add bars for project 2
-            fig.add_trace(go.Bar(
-                name=project2['name'][:20],
-                y=comp_df['Discipline'],
-                x=comp_df[f'Total Price ({project2["currency"]})_2'],
-                orientation='h',
-                marker_color=BRAND2,
-                opacity=0.7
-            ))
-            
-            fig.update_layout(
-                barmode='group',
-                title=f"Cost Comparison by Discipline",
-                xaxis_title="Total Cost",
-                yaxis_title="Discipline",
-                height=max(400, len(comp_df) * 30),
-                plot_bgcolor='rgba(0,0,0,0)',
-                paper_bgcolor='rgba(0,0,0,0)',
-                font=dict(size=12),
-                margin=dict(l=10, r=10, t=40, b=10),
-                legend=dict(
-                    orientation="h",
-                    yanchor="bottom",
-                    y=1.02,
-                    xanchor="right",
-                    x=1
-                )
-            )
-            
-            st.plotly_chart(fig, use_container_width=True)
     
     # Project management
     st.markdown("<br/>", unsafe_allow_html=True)
@@ -2050,13 +2350,16 @@ def render_compare():
     if saved_projects:
         # Display saved projects
         for i, project in enumerate(saved_projects):
-            col1, col2, col3 = st.columns([3, 2, 1])
+            col1, col2, col3, col4 = st.columns([3, 2, 2, 1])
             with col1:
                 st.write(f"**{project['name']}**")
-                st.caption(f"{project['type_of_schedule']} • {project['currency']} • {project['total_manhour']:,.0f} MH • {project['total_exact']:,.2f} {project['currency']}")
+                st.caption(f"{project['type_of_schedule']} • {project['currency']}")
             with col2:
-                st.caption(f"Saved: {datetime.fromisoformat(project['timestamp']).strftime('%Y-%m-%d %H:%M')}")
+                st.caption(f"Method A: {project['total_exact']:,.2f}")
+                st.caption(f"Method B: {project['total_kpbi']:,.2f}")
             with col3:
+                st.caption(f"Saved: {datetime.fromisoformat(project['timestamp']).strftime('%Y-%m-%d %H:%M')}")
+            with col4:
                 if st.button("🗑️", key=f"delete_{i}", help="Delete project"):
                     st.session_state[SAVED_PROJECTS_KEY].pop(i)
                     st.success("Project deleted!")
@@ -2106,6 +2409,10 @@ if page == "MAIN":
     render_main()
 elif page == "TABLE":
     render_table()
+elif page == "THIRD_PARTY":
+    render_third_party()
+elif page == "LOADING":
+    render_loading()
 elif page == "TOTALS":
     render_totals()
 elif page == "SUMMARY":
