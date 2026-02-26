@@ -46,61 +46,7 @@ except Exception:
 st.set_page_config(page_title="MEC TOOL", layout="wide")
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Initialize session state FIRST before anything else
-# ──────────────────────────────────────────────────────────────────────────────
-def init_session_state():
-    """Initialize all session state variables"""
-    
-    # Page state
-    if "page" not in st.session_state:
-        st.session_state["page"] = "MAIN"
-    
-    # Project info
-    if "project_title" not in st.session_state:
-        st.session_state["project_title"] = ""
-    if "cost_engineer" not in st.session_state:
-        st.session_state["cost_engineer"] = ""
-    if "tp_specialist" not in st.session_state:
-        st.session_state["tp_specialist"] = ""
-    if "project_date" not in st.session_state:
-        st.session_state["project_date"] = None
-    if "type_of_package" not in st.session_state:
-        st.session_state["type_of_package"] = "MEC"
-    if "type_of_schedule" not in st.session_state:
-        st.session_state["type_of_schedule"] = "Schedule A"
-    if "rate_source" not in st.session_state:
-        st.session_state["rate_source"] = "MEC.csv"
-    if "kpbi_rate" not in st.session_state:
-        st.session_state["kpbi_rate"] = 0.0
-    
-    # DataFrames
-    if "grid_df" not in st.session_state:
-        st.session_state["grid_df"] = pd.DataFrame()
-    if "third_party_df" not in st.session_state:
-        st.session_state["third_party_df"] = pd.DataFrame()
-    if "monthly_loading_df" not in st.session_state:
-        st.session_state["monthly_loading_df"] = pd.DataFrame()
-    if "saved_projects" not in st.session_state:
-        st.session_state["saved_projects"] = []
-    
-    # CSV data
-    if "mec_df" not in st.session_state:
-        st.session_state["mec_df"] = pd.DataFrame()
-    if "schedule_opts" not in st.session_state:
-        st.session_state["schedule_opts"] = []
-    if "personnel_list" not in st.session_state:
-        st.session_state["personnel_list"] = []
-    if "rate_types" not in st.session_state:
-        st.session_state["rate_types"] = []
-    if "mec_data_loaded" not in st.session_state:
-        st.session_state["mec_data_loaded"] = False
-
-
-# Initialize session state
-init_session_state()
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Constants
+# Constants - Define these FIRST before any functions
 # ──────────────────────────────────────────────────────────────────────────────
 HOURS_PER_MONTH = 176.0
 USD_SCHEDULES = {"schedule b", "b", "schedule d", "d"}
@@ -243,6 +189,66 @@ PAGES = {
     "SUMMARY": "📈 Summary & Download",
     "COMPARE": "🔄 Compare Projects"
 }
+
+# Session state keys
+GRID_KEY = "grid_df"
+THIRD_PARTY_KEY = "third_party_df"
+MONTHLY_LOADING_KEY = "monthly_loading_df"
+SAVED_PROJECTS_KEY = "saved_projects"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Initialize session state FIRST before anything else
+# ──────────────────────────────────────────────────────────────────────────────
+def init_session_state():
+    """Initialize all session state variables"""
+    
+    # Page state
+    if "page" not in st.session_state:
+        st.session_state["page"] = "MAIN"
+    
+    # Project info
+    if "project_title" not in st.session_state:
+        st.session_state["project_title"] = ""
+    if "cost_engineer" not in st.session_state:
+        st.session_state["cost_engineer"] = ""
+    if "tp_specialist" not in st.session_state:
+        st.session_state["tp_specialist"] = ""
+    if "project_date" not in st.session_state:
+        st.session_state["project_date"] = None
+    if "type_of_package" not in st.session_state:
+        st.session_state["type_of_package"] = "MEC"
+    if "type_of_schedule" not in st.session_state:
+        st.session_state["type_of_schedule"] = "Schedule A"
+    if "rate_source" not in st.session_state:
+        st.session_state["rate_source"] = "MEC.csv"
+    if "kpbi_rate" not in st.session_state:
+        st.session_state["kpbi_rate"] = 0.0
+    
+    # DataFrames
+    if GRID_KEY not in st.session_state:
+        st.session_state[GRID_KEY] = pd.DataFrame()
+    if THIRD_PARTY_KEY not in st.session_state:
+        st.session_state[THIRD_PARTY_KEY] = pd.DataFrame()
+    if MONTHLY_LOADING_KEY not in st.session_state:
+        st.session_state[MONTHLY_LOADING_KEY] = pd.DataFrame()
+    if SAVED_PROJECTS_KEY not in st.session_state:
+        st.session_state[SAVED_PROJECTS_KEY] = []
+    
+    # CSV data
+    if "mec_df" not in st.session_state:
+        st.session_state["mec_df"] = pd.DataFrame()
+    if "schedule_opts" not in st.session_state:
+        st.session_state["schedule_opts"] = []
+    if "personnel_list" not in st.session_state:
+        st.session_state["personnel_list"] = []
+    if "rate_types" not in st.session_state:
+        st.session_state["rate_types"] = []
+    if "mec_data_loaded" not in st.session_state:
+        st.session_state["mec_data_loaded"] = False
+
+
+# Initialize session state
+init_session_state()
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Theme Configuration
@@ -449,6 +455,121 @@ def build_category_options(schedule: str, mec_df) -> List[str]:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Grid Initialization Functions - Define BEFORE they are called
+# ──────────────────────────────────────────────────────────────────────────────
+def initialize_default_grids():
+    """Initialize default grids after data is loaded"""
+    tmp_schedule = st.session_state["type_of_schedule"]
+    tmp_categories = build_category_options(tmp_schedule, st.session_state.get("mec_df", pd.DataFrame()))
+    if not tmp_categories:
+        tmp_categories = B_D_CATEGORY_FALLBACK if is_usd(tmp_schedule) else AC_CATEGORIES
+    
+    # Personnel Table
+    rows = []
+    for disc, count in DISCIPLINE_ROW_COUNTS.items():
+        defaults = DEFAULT_PERSONNEL.get(disc, [])
+        for i in range(count):
+            personnel = defaults[i] if i < len(defaults) else (st.session_state.get("personnel_list", [""])[0] if st.session_state.get("personnel_list") else "")
+            rows.append({
+                "Swatch": DISCIPLINE_SWATCH.get(disc, "⬜"),
+                "Discipline": disc,
+                "Personnel": personnel,
+                "Category": tmp_categories[0] if tmp_categories else "",
+                "Type of Unit Rate": "Normalise",
+                "Weightage (FTE)": 0.0,
+                "Duration (months)": 1.0,
+            })
+    st.session_state[GRID_KEY] = pd.DataFrame(rows)
+    
+    # Third Party
+    third_party_rows = []
+    for category in THIRD_PARTY_CATEGORIES:
+        third_party_rows.append({
+            "Category": category,
+            "Description": "",
+            "Basis": "% of Labour Cost",
+            "Percentage": 0.0,
+            "Fixed Amount": 0.0,
+            "Remarks": ""
+        })
+    st.session_state[THIRD_PARTY_KEY] = pd.DataFrame(third_party_rows)
+    
+    # Monthly Loading
+    months = [f"Month {i+1:02d}" for i in range(12)]
+    monthly_data = {
+        "Month": months,
+        "Loading Factor (%)": [100.0] * 12,
+        "Weightage Distribution": [100.0/12] * 12
+    }
+    st.session_state[MONTHLY_LOADING_KEY] = pd.DataFrame(monthly_data)
+
+
+def reset_grid():
+    """Reset only the personnel grid to defaults"""
+    tmp_schedule = st.session_state["type_of_schedule"]
+    categories = build_category_options(tmp_schedule, st.session_state.get("mec_df", pd.DataFrame()))
+    if not categories:
+        categories = B_D_CATEGORY_FALLBACK if is_usd(tmp_schedule) else AC_CATEGORIES
+    
+    rows = []
+    for disc, count in DISCIPLINE_ROW_COUNTS.items():
+        defaults = DEFAULT_PERSONNEL.get(disc, [])
+        for i in range(count):
+            personnel = defaults[i] if i < len(defaults) else (st.session_state.get("personnel_list", [""])[0] if st.session_state.get("personnel_list") else "")
+            rows.append({
+                "Swatch": DISCIPLINE_SWATCH.get(disc, "⬜"),
+                "Discipline": disc,
+                "Personnel": personnel,
+                "Category": categories[0] if categories else "",
+                "Type of Unit Rate": "Normalise",
+                "Weightage (FTE)": 0.0,
+                "Duration (months)": 1.0,
+            })
+    st.session_state[GRID_KEY] = pd.DataFrame(rows)
+
+
+def reset_all():
+    """Reset all session state to default values but keep file data"""
+    # Keep file-related data
+    mec_df = st.session_state.get("mec_df", pd.DataFrame())
+    schedule_opts = st.session_state.get("schedule_opts", [])
+    personnel_list = st.session_state.get("personnel_list", [])
+    rate_types = st.session_state.get("rate_types", [])
+    data_loaded = st.session_state.get("mec_data_loaded", False)
+    
+    # Clear all session state except file data
+    for key in list(st.session_state.keys()):
+        if key not in ["mec_df", "schedule_opts", "personnel_list", "rate_types", "mec_data_loaded"]:
+            del st.session_state[key]
+    
+    # Restore file data
+    st.session_state["mec_df"] = mec_df
+    st.session_state["schedule_opts"] = schedule_opts
+    st.session_state["personnel_list"] = personnel_list
+    st.session_state["rate_types"] = rate_types
+    st.session_state["mec_data_loaded"] = data_loaded
+    
+    # Reset page
+    st.session_state["page"] = "MAIN"
+    
+    # Reset project info
+    st.session_state["project_title"] = ""
+    st.session_state["cost_engineer"] = ""
+    st.session_state["tp_specialist"] = ""
+    st.session_state["project_date"] = None
+    st.session_state["type_of_package"] = "MEC"
+    if schedule_opts:
+        st.session_state["type_of_schedule"] = schedule_opts[0]
+    else:
+        st.session_state["type_of_schedule"] = "Schedule A"
+    st.session_state["rate_source"] = "MEC.csv"
+    st.session_state["kpbi_rate"] = 0.0
+    
+    # Reinitialize grids
+    initialize_default_grids()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Load MEC.csv
 # ──────────────────────────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False, ttl=600)
@@ -566,6 +687,7 @@ if mec_file is not None and not st.session_state["mec_data_loaded"]:
         st.sidebar.write(f"✅ MEC.csv: {len(mec_df)} rows")
         st.sidebar.write(f"✅ {len(schedule_opts)} schedules found")
         
+        # Now call initialize_default_grids after data is loaded
         initialize_default_grids()
         do_rerun()
 
@@ -575,108 +697,12 @@ schedule_opts = st.session_state.get("schedule_opts", [])
 PERSONNEL_LIST = st.session_state.get("personnel_list", [])
 RATE_TYPES = st.session_state.get("rate_types", UNIT_TYPES)
 
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Grid Initialization
-# ──────────────────────────────────────────────────────────────────────────────
-def initialize_default_grids():
-    """Initialize default grids after data is loaded"""
-    tmp_schedule = st.session_state["type_of_schedule"]
-    tmp_categories = build_category_options(tmp_schedule, mec_df)
-    if not tmp_categories:
-        tmp_categories = B_D_CATEGORY_FALLBACK if is_usd(tmp_schedule) else AC_CATEGORIES
-    
-    # Personnel Table
-    rows = []
-    for disc, count in DISCIPLINE_ROW_COUNTS.items():
-        defaults = DEFAULT_PERSONNEL.get(disc, [])
-        for i in range(count):
-            personnel = defaults[i] if i < len(defaults) else (PERSONNEL_LIST[0] if PERSONNEL_LIST else "")
-            rows.append({
-                "Swatch": DISCIPLINE_SWATCH.get(disc, "⬜"),
-                "Discipline": disc,
-                "Personnel": personnel,
-                "Category": tmp_categories[0] if tmp_categories else "",
-                "Type of Unit Rate": "Normalise",
-                "Weightage (FTE)": 0.0,
-                "Duration (months)": 1.0,
-            })
-    st.session_state["grid_df"] = pd.DataFrame(rows)
-    
-    # Third Party
-    third_party_rows = []
-    for category in THIRD_PARTY_CATEGORIES:
-        third_party_rows.append({
-            "Category": category,
-            "Description": "",
-            "Basis": "% of Labour Cost",
-            "Percentage": 0.0,
-            "Fixed Amount": 0.0,
-            "Remarks": ""
-        })
-    st.session_state["third_party_df"] = pd.DataFrame(third_party_rows)
-    
-    # Monthly Loading
-    months = [f"Month {i+1:02d}" for i in range(12)]
-    monthly_data = {
-        "Month": months,
-        "Loading Factor (%)": [100.0] * 12,
-        "Weightage Distribution": [100.0/12] * 12
-    }
-    st.session_state["monthly_loading_df"] = pd.DataFrame(monthly_data)
-
-
-# Initialize grids if needed
-if st.session_state["mec_data_loaded"] and st.session_state["grid_df"].empty:
+# Initialize grids if needed (after data is loaded and grids are empty)
+if st.session_state["mec_data_loaded"] and st.session_state[GRID_KEY].empty:
     initialize_default_grids()
 
-
 # ──────────────────────────────────────────────────────────────────────────────
-# Reset Function
-# ──────────────────────────────────────────────────────────────────────────────
-def reset_all():
-    """Reset all session state to default values but keep file data"""
-    # Keep file-related data
-    mec_df = st.session_state.get("mec_df", pd.DataFrame())
-    schedule_opts = st.session_state.get("schedule_opts", [])
-    personnel_list = st.session_state.get("personnel_list", [])
-    rate_types = st.session_state.get("rate_types", [])
-    data_loaded = st.session_state.get("mec_data_loaded", False)
-    
-    # Clear all session state except file data
-    for key in list(st.session_state.keys()):
-        if key not in ["mec_df", "schedule_opts", "personnel_list", "rate_types", "mec_data_loaded"]:
-            del st.session_state[key]
-    
-    # Restore file data
-    st.session_state["mec_df"] = mec_df
-    st.session_state["schedule_opts"] = schedule_opts
-    st.session_state["personnel_list"] = personnel_list
-    st.session_state["rate_types"] = rate_types
-    st.session_state["mec_data_loaded"] = data_loaded
-    
-    # Reset page
-    st.session_state["page"] = "MAIN"
-    
-    # Reset project info
-    st.session_state["project_title"] = ""
-    st.session_state["cost_engineer"] = ""
-    st.session_state["tp_specialist"] = ""
-    st.session_state["project_date"] = None
-    st.session_state["type_of_package"] = "MEC"
-    if schedule_opts:
-        st.session_state["type_of_schedule"] = schedule_opts[0]
-    else:
-        st.session_state["type_of_schedule"] = "Schedule A"
-    st.session_state["rate_source"] = "MEC.csv"
-    st.session_state["kpbi_rate"] = 0.0
-    
-    # Reinitialize grids
-    initialize_default_grids()
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Rate Lookup
+# Rate Lookup Functions
 # ──────────────────────────────────────────────────────────────────────────────
 def _canonical_col(df: pd.DataFrame, name: str) -> pd.Series:
     s = get_col(df, name)
@@ -753,7 +779,7 @@ def get_rate(mec_df: pd.DataFrame, personnel: str, category: str, unit_type: str
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Calculations
+# Calculation Functions
 # ──────────────────────────────────────────────────────────────────────────────
 def calculate_labour_costs(grid_df: pd.DataFrame, currency: str, type_of_schedule: str) -> pd.DataFrame:
     if grid_df.empty:
@@ -867,17 +893,17 @@ def compute_totals(labour_df: pd.DataFrame, third_party_df: pd.DataFrame,
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Project Save/Load
+# Project Save/Load Functions
 # ──────────────────────────────────────────────────────────────────────────────
 def save_current_project():
     type_of_schedule = st.session_state["type_of_schedule"]
     currency = currency_for(type_of_schedule)
     kpbi_rate = st.session_state["kpbi_rate"]
     
-    labour_df = calculate_labour_costs(st.session_state["grid_df"], currency, type_of_schedule)
+    labour_df = calculate_labour_costs(st.session_state[GRID_KEY], currency, type_of_schedule)
     total_labour = float(labour_df[f"Labour Cost ({currency})"].sum()) if not labour_df.empty else 0.0
-    third_party_df = calculate_third_party_costs(st.session_state["third_party_df"], total_labour, currency)
-    totals = compute_totals(labour_df, third_party_df, st.session_state["monthly_loading_df"], currency, kpbi_rate)
+    third_party_df = calculate_third_party_costs(st.session_state[THIRD_PARTY_KEY], total_labour, currency)
+    totals = compute_totals(labour_df, third_party_df, st.session_state[MONTHLY_LOADING_KEY], currency, kpbi_rate)
     
     project_data = {
         "id": datetime.now().strftime("%Y%m%d_%H%M%S"),
@@ -896,11 +922,11 @@ def save_current_project():
         "discipline_totals": totals["discipline_totals"].to_dict('records') if not totals["discipline_totals"].empty else [],
         "labour_line_items": labour_df.to_dict('records'),
         "third_party_items": third_party_df.to_dict('records'),
-        "personnel_count": len(st.session_state["grid_df"]),
-        "disciplines_used": st.session_state["grid_df"]["Discipline"].nunique()
+        "personnel_count": len(st.session_state[GRID_KEY]),
+        "disciplines_used": st.session_state[GRID_KEY]["Discipline"].nunique()
     }
     
-    st.session_state["saved_projects"].append(project_data)
+    st.session_state[SAVED_PROJECTS_KEY].append(project_data)
     return project_data
 
 
@@ -916,7 +942,7 @@ def compare_projects(p1, p2):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Excel Export
+# Excel Export Function
 # ──────────────────────────────────────────────────────────────────────────────
 def to_excel_bytes(main_meta: pd.DataFrame, totals: dict, labour_df: pd.DataFrame, 
                    third_party_df: pd.DataFrame, monthly_df: pd.DataFrame, 
@@ -978,7 +1004,7 @@ def to_excel_bytes(main_meta: pd.DataFrame, totals: dict, labour_df: pd.DataFram
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Navigation
+# Navigation Function
 # ──────────────────────────────────────────────────────────────────────────────
 def render_navigation():
     current_page = st.session_state["page"]
@@ -992,29 +1018,6 @@ def render_navigation():
                 do_rerun()
     
     st.markdown("---")
-
-
-def reset_grid():
-    tmp_schedule = st.session_state["type_of_schedule"]
-    categories = build_category_options(tmp_schedule, mec_df)
-    if not categories:
-        categories = B_D_CATEGORY_FALLBACK if is_usd(tmp_schedule) else AC_CATEGORIES
-    
-    rows = []
-    for disc, count in DISCIPLINE_ROW_COUNTS.items():
-        defaults = DEFAULT_PERSONNEL.get(disc, [])
-        for i in range(count):
-            personnel = defaults[i] if i < len(defaults) else (PERSONNEL_LIST[0] if PERSONNEL_LIST else "")
-            rows.append({
-                "Swatch": DISCIPLINE_SWATCH.get(disc, "⬜"),
-                "Discipline": disc,
-                "Personnel": personnel,
-                "Category": categories[0] if categories else "",
-                "Type of Unit Rate": "Normalise",
-                "Weightage (FTE)": 0.0,
-                "Duration (months)": 1.0,
-            })
-    st.session_state["grid_df"] = pd.DataFrame(rows)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1111,15 +1114,15 @@ def render_table():
 
     st.header(f"Personnel Table — Currency: {currency}")
 
-    df = st.session_state["grid_df"].copy()
+    df = st.session_state[GRID_KEY].copy()
     if df.empty:
         initialize_default_grids()
-        df = st.session_state["grid_df"].copy()
+        df = st.session_state[GRID_KEY].copy()
     
     if "Category" in df.columns and categories:
         df["Category"] = df["Category"].where(df["Category"].isin(categories), categories[0])
     df["Swatch"] = df["Discipline"].map(DISCIPLINE_SWATCH).fillna("⬜")
-    st.session_state["grid_df"] = df
+    st.session_state[GRID_KEY] = df
 
     # Bulk actions
     st.subheader("Bulk actions")
@@ -1127,40 +1130,40 @@ def render_table():
     with c_w:
         new_w = st.number_input("Weightage for ALL", min_value=0.0, step=0.1, value=0.0, key="bulk_w")
         if st.button("Apply", key="apply_w", use_container_width=True):
-            df = st.session_state["grid_df"].copy()
+            df = st.session_state[GRID_KEY].copy()
             df["Weightage (FTE)"] = float(st.session_state["bulk_w"])
-            st.session_state["grid_df"] = df
+            st.session_state[GRID_KEY] = df
             st.success("Applied!")
             do_rerun()
     with c_cat:
         new_cat = st.selectbox("Category for ALL", categories, key="bulk_cat")
         if st.button("Apply", key="apply_cat", use_container_width=True):
-            df = st.session_state["grid_df"].copy()
+            df = st.session_state[GRID_KEY].copy()
             df["Category"] = st.session_state["bulk_cat"]
-            st.session_state["grid_df"] = df
+            st.session_state[GRID_KEY] = df
             st.success("Applied!")
             do_rerun()
     with c_type:
         new_type = st.selectbox("Rate Type for ALL", RATE_TYPES if RATE_TYPES else UNIT_TYPES, key="bulk_type")
         if st.button("Apply", key="apply_type", use_container_width=True):
-            df = st.session_state["grid_df"].copy()
+            df = st.session_state[GRID_KEY].copy()
             df["Type of Unit Rate"] = st.session_state["bulk_type"]
-            st.session_state["grid_df"] = df
+            st.session_state[GRID_KEY] = df
             st.success("Applied!")
             do_rerun()
     with c_dur:
         new_dur = st.number_input("Duration for ALL", min_value=0, step=1, value=1, key="bulk_dur")
         if st.button("Apply", key="apply_dur", use_container_width=True):
-            df = st.session_state["grid_df"].copy()
+            df = st.session_state[GRID_KEY].copy()
             df["Duration (months)"] = int(st.session_state["bulk_dur"])
-            st.session_state["grid_df"] = df
+            st.session_state[GRID_KEY] = df
             st.success("Applied!")
             do_rerun()
 
     c1, c2, c3 = st.columns(3)
     with c1:
         if st.button("➕ Add Row", use_container_width=True):
-            df = st.session_state["grid_df"].copy()
+            df = st.session_state[GRID_KEY].copy()
             df.loc[len(df)] = {
                 "Swatch": "⬜",
                 "Discipline": list(DISCIPLINE_ROW_COUNTS.keys())[0],
@@ -1170,7 +1173,7 @@ def render_table():
                 "Weightage (FTE)": 0.0,
                 "Duration (months)": 1.0,
             }
-            st.session_state["grid_df"] = df
+            st.session_state[GRID_KEY] = df
             do_rerun()
     with c2:
         if st.button("↺ Reset", use_container_width=True):
@@ -1182,7 +1185,7 @@ def render_table():
             do_rerun()
 
     # AG Grid
-    df = st.session_state["grid_df"].copy()
+    df = st.session_state[GRID_KEY].copy()
     for col in ["Weightage (FTE)", "Duration (months)"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").astype("float32")
@@ -1220,12 +1223,12 @@ def render_table():
     try:
         resp = AgGrid(df, gridOptions=gb.build(), height=500, update_on="value_changed",
                      allow_unsafe_jscode=True, theme="streamlit")
-        st.session_state["grid_df"] = pd.DataFrame(resp["data"])
+        st.session_state[GRID_KEY] = pd.DataFrame(resp["data"])
     except:
         st.warning("Grid update failed. Please refresh.")
 
     # Preview
-    labour_df = calculate_labour_costs(st.session_state["grid_df"], currency, type_of_schedule)
+    labour_df = calculate_labour_costs(st.session_state[GRID_KEY], currency, type_of_schedule)
     total = labour_df[f"Labour Cost ({currency})"].sum() if not labour_df.empty else 0
     
     if not labour_df.empty:
@@ -1246,15 +1249,15 @@ def render_third_party():
     st.header("💰 Third Party & Non-Labour Costs")
     currency = currency_for(st.session_state["type_of_schedule"])
     
-    labour_df = calculate_labour_costs(st.session_state["grid_df"], currency, st.session_state["type_of_schedule"])
+    labour_df = calculate_labour_costs(st.session_state[GRID_KEY], currency, st.session_state["type_of_schedule"])
     total_labour = labour_df[f"Labour Cost ({currency})"].sum() if not labour_df.empty else 0
     
     st.info(f"Current Total Labour Cost: {currency} {total_labour:,.2f}")
     
-    df = st.session_state["third_party_df"].copy()
+    df = st.session_state[THIRD_PARTY_KEY].copy()
     if df.empty:
         initialize_default_grids()
-        df = st.session_state["third_party_df"].copy()
+        df = st.session_state[THIRD_PARTY_KEY].copy()
     
     # Display editable rows
     for idx, row in df.iterrows():
@@ -1284,18 +1287,18 @@ def render_third_party():
             df.loc[idx, "Remarks"] = st.text_input(f"rem_{idx}", value=row["Remarks"],
                 label_visibility="collapsed", key=f"rem_{idx}")
     
-    st.session_state["third_party_df"] = df
+    st.session_state[THIRD_PARTY_KEY] = df
     
     col1, col2, col3 = st.columns(3)
     with col1:
         if st.button("➕ Add Item", use_container_width=True):
             new = pd.DataFrame([{"Category": THIRD_PARTY_CATEGORIES[0], "Description": "", "Basis": "% of Labour Cost",
                                "Percentage": 0.0, "Fixed Amount": 0.0, "Remarks": ""}])
-            st.session_state["third_party_df"] = pd.concat([df, new], ignore_index=True)
+            st.session_state[THIRD_PARTY_KEY] = pd.concat([df, new], ignore_index=True)
             do_rerun()
     with col2:
         if st.button("🗑️ Remove Last", use_container_width=True) and len(df) > 0:
-            st.session_state["third_party_df"] = df.iloc[:-1].reset_index(drop=True)
+            st.session_state[THIRD_PARTY_KEY] = df.iloc[:-1].reset_index(drop=True)
             do_rerun()
     with col3:
         if st.button("📅 Next", use_container_width=True):
@@ -1316,15 +1319,15 @@ def render_loading():
     st.header("📅 Monthly Loading")
     currency = currency_for(st.session_state["type_of_schedule"])
     
-    labour_df = calculate_labour_costs(st.session_state["grid_df"], currency, st.session_state["type_of_schedule"])
+    labour_df = calculate_labour_costs(st.session_state[GRID_KEY], currency, st.session_state["type_of_schedule"])
     total_labour = labour_df[f"Labour Cost ({currency})"].sum() if not labour_df.empty else 0
     
-    third_party_df = calculate_third_party_costs(st.session_state["third_party_df"], total_labour, currency)
+    third_party_df = calculate_third_party_costs(st.session_state[THIRD_PARTY_KEY], total_labour, currency)
     
-    df = st.session_state["monthly_loading_df"].copy()
+    df = st.session_state[MONTHLY_LOADING_KEY].copy()
     if df.empty:
         initialize_default_grids()
-        df = st.session_state["monthly_loading_df"].copy()
+        df = st.session_state[MONTHLY_LOADING_KEY].copy()
     
     col1, col2, col3 = st.columns([2, 1, 2])
     with col1:
@@ -1342,7 +1345,7 @@ def render_loading():
             else:
                 df = df.iloc[:num].reset_index(drop=True)
             df["Weightage Distribution"] = 100.0 / num
-            st.session_state["monthly_loading_df"] = df
+            st.session_state[MONTHLY_LOADING_KEY] = df
             do_rerun()
     with col3:
         st.info("Loading factors multiply monthly costs")
@@ -1367,7 +1370,7 @@ def render_loading():
     if abs(df["Weightage Distribution"].sum() - 100) > 0.01:
         st.warning(f"Total weightage: {df['Weightage Distribution'].sum():.1f}% (should be 100%)")
     
-    st.session_state["monthly_loading_df"] = df
+    st.session_state[MONTHLY_LOADING_KEY] = df
     
     breakdown = apply_monthly_loading(labour_df, third_party_df, df, currency)
     preview = pd.DataFrame([{
@@ -1395,7 +1398,7 @@ def render_loading():
         if st.button("↺ Reset", use_container_width=True):
             months = [f"Month {i+1:02d}" for i in range(12)]
             default = pd.DataFrame({"Month": months, "Loading Factor (%)": [100.0]*12, "Weightage Distribution": [100.0/12]*12})
-            st.session_state["monthly_loading_df"] = default
+            st.session_state[MONTHLY_LOADING_KEY] = default
             do_rerun()
 
 
@@ -1404,11 +1407,11 @@ def render_totals():
     currency = currency_for(schedule)
     kpbi = st.session_state["kpbi_rate"]
 
-    labour_df = calculate_labour_costs(st.session_state["grid_df"], currency, schedule)
+    labour_df = calculate_labour_costs(st.session_state[GRID_KEY], currency, schedule)
     total_labour = float(labour_df[f"Labour Cost ({currency})"].sum()) if not labour_df.empty else 0.0
     
-    third_df = calculate_third_party_costs(st.session_state["third_party_df"], total_labour, currency)
-    totals = compute_totals(labour_df, third_df, st.session_state["monthly_loading_df"], currency, kpbi)
+    third_df = calculate_third_party_costs(st.session_state[THIRD_PARTY_KEY], total_labour, currency)
+    totals = compute_totals(labour_df, third_df, st.session_state[MONTHLY_LOADING_KEY], currency, kpbi)
 
     st.markdown(
         f"""
@@ -1498,11 +1501,11 @@ def render_summary():
         "Hours/Month": HOURS_PER_MONTH,
     }])
 
-    labour_df = calculate_labour_costs(st.session_state["grid_df"], currency, schedule)
+    labour_df = calculate_labour_costs(st.session_state[GRID_KEY], currency, schedule)
     total_labour = float(labour_df[f"Labour Cost ({currency})"].sum()) if not labour_df.empty else 0.0
     
-    third_df = calculate_third_party_costs(st.session_state["third_party_df"], total_labour, currency)
-    totals = compute_totals(labour_df, third_df, st.session_state["monthly_loading_df"], currency, kpbi)
+    third_df = calculate_third_party_costs(st.session_state[THIRD_PARTY_KEY], total_labour, currency)
+    totals = compute_totals(labour_df, third_df, st.session_state[MONTHLY_LOADING_KEY], currency, kpbi)
 
     st.subheader("Project Information")
     st.dataframe(meta, use_container_width=True)
@@ -1534,7 +1537,7 @@ def render_summary():
 
     if st.button("📥 Download Excel Report", type="primary", use_container_width=True):
         with st.spinner("Generating..."):
-            excel = to_excel_bytes(meta, totals, labour_df, third_df, st.session_state["monthly_loading_df"], schedule, currency)
+            excel = to_excel_bytes(meta, totals, labour_df, third_df, st.session_state[MONTHLY_LOADING_KEY], schedule, currency)
             st.download_button("⬇️ Download", data=excel, file_name=f"MEC_{st.session_state['project_title'] or 'Output'}.xlsx",
                              mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
@@ -1557,7 +1560,7 @@ def render_summary():
 def render_compare():
     st.header("Project Comparison")
     
-    saved = st.session_state.get("saved_projects", [])
+    saved = st.session_state.get(SAVED_PROJECTS_KEY, [])
     if not saved:
         st.info("No saved projects. Save from Totals or Summary page.")
         if st.button("⬅️ Back"):
@@ -1628,11 +1631,11 @@ def render_compare():
         with cols[3]:
             if st.button("🗑️", key=f"del_{i}"):
                 saved.pop(i)
-                st.session_state["saved_projects"] = saved
+                st.session_state[SAVED_PROJECTS_KEY] = saved
                 do_rerun()
 
     if st.button("Clear All", type="secondary"):
-        st.session_state["saved_projects"] = []
+        st.session_state[SAVED_PROJECTS_KEY] = []
         do_rerun()
 
     if st.button("⬅️ Back to Summary"):
