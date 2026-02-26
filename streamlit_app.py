@@ -1,5 +1,5 @@
 # streamlit_app.py
-# MEC TOOL – Streamlit app (Fixed CSV header handling)
+# MEC TOOL – Streamlit app (Single CSV version with reset functionality)
 # Author: Ahmad Naquib Syahmee Masror (Dev/Upstream)
 # Date: 2025-10-29
 
@@ -156,6 +156,16 @@ def apply_theme(dark: bool, brand1: str, brand2: str, muted: str) -> None:
         background: rgba(156, 163, 175, 0.15);
         color: #9CA3AF;
       }}
+      /* Reset button styling */
+      div.stButton > button[kind="secondary"] {{
+        background: transparent;
+        color: var(--text);
+        border: 1px solid var(--text-muted);
+      }}
+      div.stButton > button[kind="secondary"]:hover {{
+        border-color: var(--brand1);
+        color: var(--brand1);
+      }}
     </style>
     """,
         unsafe_allow_html=True,
@@ -186,23 +196,26 @@ B_D_CATEGORY_FALLBACK = [
 ]
 AC_CATEGORIES = ["Malaysian", "Regional", "Expatriate"]
 
-# Rate types as requested (masked)
-UNIT_TYPES = ["Minimum", "Maximum", "Normalise", "Rate A", "Rate B", "Rate C", "Rate D", "Rate E", "Rate F"]
+# Rate types as requested (masked) - now all vendor rates are in Type of Rate
+UNIT_TYPES = [
+    "Minimum", "Maximum", "Normalise", 
+    "AKER", "DAR", "MMC", "TUAH", "PRW", "PUSB"
+]
 
-# Mapping from displayed rate types to actual column names in CSV
-RATE_COLUMN_MAPPING = {
-    "Rate A": "MMC",
-    "Rate B": "DAR",
-    "Rate C": "AKER",
-    "Rate D": "TUAH",
-    "Rate E": "PRW",
-    "Rate F": "PUSB",
-    "Minimum": "MINIMUM UNIT RATE",
-    "Maximum": "MAXIMUM UNIT RATE",
-    "Normalise": "NORMALISE RATE"
+# Mapping for rate types (for backward compatibility)
+RATE_MAPPING = {
+    "AKER": "AKER",
+    "DAR": "DAR",
+    "MMC": "MMC",
+    "TUAH": "TUAH",
+    "PRW": "PRW",
+    "PUSB": "PUSB",
+    "Minimum": "MINIMUM",
+    "Maximum": "MAXIMUM",
+    "Normalise": "NORMALISE"
 }
 
-RATE_SOURCES = ["Data", "U1", "U2"]
+RATE_SOURCES = ["MEC.csv"]  # Single source now
 
 # Third Party & Non-Labour cost categories
 THIRD_PARTY_CATEGORIES = [
@@ -404,19 +417,17 @@ def currency_for(schedule: str) -> str:
     return "USD" if is_usd(schedule) else "MYR"
 
 
-def build_category_options(schedule: str, rate_source: str, data_tbl, u1_tbl, u2_tbl) -> List[str]:
-    """Build category options from the selected rate source"""
-    sheet = {"Data": data_tbl, "U1": u1_tbl, "U2": u2_tbl}.get(rate_source, pd.DataFrame())
-    if sheet is not None and not sheet.empty:
-        df = sheet.copy()
-        if "Schedules" in df.columns and schedule:
-            # Match schedule in U1/U2 sheets
-            sched_col = get_col(df, "Schedules")
+def build_category_options(schedule: str, mec_df) -> List[str]:
+    """Build category options from MEC.csv"""
+    if mec_df is not None and not mec_df.empty:
+        df = mec_df.copy()
+        if "SCHEDULES" in df.columns and schedule:
+            sched_col = get_col(df, "SCHEDULES")
             if not sched_col.empty:
                 df = df[sched_col.astype(str).str.contains(schedule, case=False, na=False)]
-        if "Category" in df.columns:
+        if "CATEGORY" in df.columns:
             cats = (
-                get_col(df, "Category")
+                get_col(df, "CATEGORY")
                 .dropna()
                 .astype(str)
                 .str.strip()
@@ -430,379 +441,247 @@ def build_category_options(schedule: str, rate_source: str, data_tbl, u1_tbl, u2
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Load CSV files from upload with proper header handling
+# Load MEC.csv file from upload
 # ──────────────────────────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False, ttl=600)
-def load_csv_files_from_upload(data_file, u1_file, u2_file):
-    """Load three CSV files from uploaded file objects with proper header handling"""
-    
-    def read_data_csv(file_obj):
-        """Read DATA.csv with specific header format"""
-        try:
-            if file_obj is not None:
-                file_obj.seek(0)
-                # Read the CSV
-                df = pd.read_csv(file_obj)
-                
-                # Clean column names
-                df.columns = [str(col).strip() for col in df.columns]
-                
-                # Expected columns for DATA.csv
-                expected_cols = {
-                    'Project': 'Project',
-                    'Project Description': 'Project Description',
-                    'Schedules': 'Schedules',
-                    'Schedules Description': 'Schedules Description',
-                    'Category': 'Category',
-                    'Personnel': 'Personnel',
-                    'Type Of Rate': 'Type Of Rate',
-                    'unit rate': 'unit rate'
-                }
-                
-                # Rename columns if needed
-                rename_map = {}
-                for col in df.columns:
-                    col_lower = col.lower().strip()
-                    if 'project' in col_lower and 'description' not in col_lower:
-                        rename_map[col] = 'Project'
-                    elif 'project description' in col_lower:
-                        rename_map[col] = 'Project Description'
-                    elif 'schedule' in col_lower and 'description' not in col_lower:
-                        rename_map[col] = 'Schedules'
-                    elif 'schedule description' in col_lower:
-                        rename_map[col] = 'Schedules Description'
-                    elif 'category' in col_lower:
-                        rename_map[col] = 'Category'
-                    elif 'personnel' in col_lower:
-                        rename_map[col] = 'Personnel'
-                    elif 'type of rate' in col_lower:
-                        rename_map[col] = 'Type Of Rate'
-                    elif 'unit rate' in col_lower:
-                        rename_map[col] = 'unit rate'
-                
-                df = df.rename(columns=rename_map)
-                
-                # Ensure all expected columns exist
-                for col in expected_cols.values():
-                    if col not in df.columns:
-                        df[col] = None
-                
-                return df
-        except Exception as e:
-            st.warning(f"Error reading DATA.csv: {str(e)}")
-            return pd.DataFrame()
+def load_mec_csv(file_obj):
+    """Load MEC.csv with specific header format"""
+    try:
+        if file_obj is not None:
+            file_obj.seek(0)
+            # Read the CSV
+            df = pd.read_csv(file_obj)
+            
+            # Clean column names
+            df.columns = [str(col).strip() for col in df.columns]
+            
+            # Expected columns for MEC.csv
+            expected_cols = {
+                'PROJECT': 'PROJECT',
+                'PROJECT DESCRIPTION': 'PROJECT DESCRIPTION',
+                'SCHEDULES': 'SCHEDULES',
+                'SCHEDULES DESCRIPTION': 'SCHEDULES DESCRIPTION',
+                'CATEGORY': 'CATEGORY',
+                'PERSONNEL': 'PERSONNEL',
+                'TYPE OF RATE': 'TYPE OF RATE',
+                'UNIT RATE': 'UNIT RATE'
+            }
+            
+            # Rename columns based on common variations
+            rename_map = {}
+            for col in df.columns:
+                col_lower = col.lower().strip()
+                if 'project' in col_lower and 'description' not in col_lower:
+                    rename_map[col] = 'PROJECT'
+                elif 'project description' in col_lower:
+                    rename_map[col] = 'PROJECT DESCRIPTION'
+                elif 'schedule' in col_lower and 'description' not in col_lower:
+                    rename_map[col] = 'SCHEDULES'
+                elif 'schedule description' in col_lower:
+                    rename_map[col] = 'SCHEDULES DESCRIPTION'
+                elif 'category' in col_lower:
+                    rename_map[col] = 'CATEGORY'
+                elif 'personnel' in col_lower:
+                    rename_map[col] = 'PERSONNEL'
+                elif 'type of rate' in col_lower:
+                    rename_map[col] = 'TYPE OF RATE'
+                elif 'unit rate' in col_lower:
+                    rename_map[col] = 'UNIT RATE'
+            
+            df = df.rename(columns=rename_map)
+            
+            # Ensure all expected columns exist
+            for col in expected_cols.values():
+                if col not in df.columns:
+                    df[col] = None
+            
+            return df
+    except Exception as e:
+        st.warning(f"Error reading MEC.csv: {str(e)}")
         return pd.DataFrame()
-
-    def read_u_csv(file_obj, sheet_name):
-        """Read U1.csv or U2.csv with specific header format"""
-        try:
-            if file_obj is not None:
-                file_obj.seek(0)
-                # Read the CSV
-                df = pd.read_csv(file_obj)
-                
-                # Clean column names
-                df.columns = [str(col).strip() for col in df.columns]
-                
-                # Expected columns for U1/U2.csv
-                expected_cols = {
-                    'PROJECT': 'PROJECT',
-                    'Schedules': 'Schedules',
-                    'Personnel': 'Personnel',
-                    'Position': 'Position',
-                    'Unit Of Measure (UOM)': 'Unit Of Measure (UOM)',
-                    'Currency': 'Currency',
-                    'Category': 'Category',
-                    'MMC': 'MMC',
-                    'DAR': 'DAR',
-                    'AKER': 'AKER',
-                    'TUAH': 'TUAH',
-                    'PRW': 'PRW',
-                    'PUSB': 'PUSB',
-                    'MINIMUM UNIT RATE': 'MINIMUM UNIT RATE',
-                    'MAXIMUM UNIT RATE': 'MAXIMUM UNIT RATE',
-                    'KPBI UNIT RATE': 'KPBI UNIT RATE',
-                    'NORMALISE RATE': 'NORMALISE RATE'
-                }
-                
-                # Rename columns based on common variations
-                rename_map = {}
-                for col in df.columns:
-                    col_lower = col.lower().strip()
-                    if 'project' in col_lower:
-                        rename_map[col] = 'PROJECT'
-                    elif 'schedule' in col_lower:
-                        rename_map[col] = 'Schedules'
-                    elif 'personnel' in col_lower:
-                        rename_map[col] = 'Personnel'
-                    elif 'position' in col_lower:
-                        rename_map[col] = 'Position'
-                    elif 'uom' in col_lower or 'unit of measure' in col_lower:
-                        rename_map[col] = 'Unit Of Measure (UOM)'
-                    elif 'currency' in col_lower:
-                        rename_map[col] = 'Currency'
-                    elif 'category' in col_lower:
-                        rename_map[col] = 'Category'
-                    elif 'mmc' in col_lower:
-                        rename_map[col] = 'MMC'
-                    elif 'dar' in col_lower:
-                        rename_map[col] = 'DAR'
-                    elif 'aker' in col_lower:
-                        rename_map[col] = 'AKER'
-                    elif 'tuah' in col_lower:
-                        rename_map[col] = 'TUAH'
-                    elif 'prw' in col_lower:
-                        rename_map[col] = 'PRW'
-                    elif 'pusb' in col_lower:
-                        rename_map[col] = 'PUSB'
-                    elif 'minimum' in col_lower and 'unit rate' in col_lower:
-                        rename_map[col] = 'MINIMUM UNIT RATE'
-                    elif 'maximum' in col_lower and 'unit rate' in col_lower:
-                        rename_map[col] = 'MAXIMUM UNIT RATE'
-                    elif 'kpbi' in col_lower and 'unit rate' in col_lower:
-                        rename_map[col] = 'KPBI UNIT RATE'
-                    elif 'normalise' in col_lower or 'normalize' in col_lower:
-                        rename_map[col] = 'NORMALISE RATE'
-                
-                df = df.rename(columns=rename_map)
-                
-                # Ensure all expected columns exist
-                for col in expected_cols.values():
-                    if col not in df.columns:
-                        df[col] = None
-                
-                return df
-        except Exception as e:
-            st.warning(f"Error reading {sheet_name}: {str(e)}")
-            return pd.DataFrame()
-        return pd.DataFrame()
-
-    # Read each file with specific handlers
-    data_tbl = read_data_csv(data_file)
-    u1_tbl = read_u_csv(u1_file, "U1.csv")
-    u2_tbl = read_u_csv(u2_file, "U2.csv")
-    
-    # Create a working dataframe from Data table
-    working = data_tbl.copy() if not data_tbl.empty else pd.DataFrame()
-
-    # Get schedule options from data table
-    schedule_opts = []
-    if not data_tbl.empty and "Schedules" in data_tbl.columns:
-        s = get_col(data_tbl, "Schedules").dropna().astype(str).str.strip()
-        schedule_opts = sorted([v for v in s.unique().tolist() if v and v.lower() != 'nan'])
-
-    # Get package options
-    package_opts = []
-    if not u1_tbl.empty:
-        package_opts.append("U1")
-    if not u2_tbl.empty:
-        package_opts.append("U2")
-    if not package_opts:
-        package_opts = ["U1", "U2"]
-
-    disciplines = list(DISCIPLINE_ROW_COUNTS.keys())
-
-    # Build personnel list from all sources
-    personnel_union = []
-    for _, plist in DEFAULT_PERSONNEL.items():
-        personnel_union.extend(plist)
-    
-    # Add personnel from Data table
-    if not data_tbl.empty and "Personnel" in data_tbl.columns:
-        personnel_from_data = get_col(data_tbl, "Personnel").dropna().astype(str).tolist()
-        personnel_union.extend(personnel_from_data)
-    
-    # Add personnel from U tables
-    for tbl in [u1_tbl, u2_tbl]:
-        if not tbl.empty and "Personnel" in tbl.columns:
-            personnel_from_u = get_col(tbl, "Personnel").dropna().astype(str).tolist()
-            personnel_union.extend(personnel_from_u)
-    
-    # Clean and deduplicate
-    personnel_union = [p for p in personnel_union if p and p.lower() != 'nan']
-    personnel_union = sorted(set(personnel_union))
-
-    # Display loaded data info in sidebar
-    st.sidebar.write("📊 Loaded Data:")
-    if not data_tbl.empty:
-        st.sidebar.write(f"✅ DATA.csv: {len(data_tbl)} rows")
-    if not u1_tbl.empty:
-        st.sidebar.write(f"✅ U1.csv: {len(u1_tbl)} rows")
-    if not u2_tbl.empty:
-        st.sidebar.write(f"✅ U2.csv: {len(u2_tbl)} rows")
-
-    return (
-        working,
-        data_tbl,
-        u1_tbl,
-        u2_tbl,
-        schedule_opts,
-        package_opts,
-        disciplines,
-        personnel_union,
-    )
+    return pd.DataFrame()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # File Upload Section in Sidebar
 # ──────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.subheader("📁 Upload CSV Files")
-    st.caption("Upload the required CSV files")
+    st.subheader("📁 Upload MEC.csv")
+    st.caption("Upload the consolidated MEC.csv file")
     
-    # File uploaders for the three CSV files
-    data_file = st.file_uploader(
-        "DATA.csv",
+    # File uploader for MEC.csv
+    mec_file = st.file_uploader(
+        "MEC.csv",
         type=["csv"],
-        key="data_uploader",
-        help="Upload the DATA.csv file containing rate information"
+        key="mec_uploader",
+        help="Upload the MEC.csv file containing all rate information"
     )
     
-    u1_file = st.file_uploader(
-        "U1.csv",
-        type=["csv"],
-        key="u1_uploader",
-        help="Upload the U1.csv file (Package U1 rates)"
-    )
+    # Check if file is uploaded
+    file_uploaded = mec_file is not None
     
-    u2_file = st.file_uploader(
-        "U2.csv",
-        type=["csv"],
-        key="u2_uploader",
-        help="Upload the U2.csv file (Package U2 rates)"
-    )
-    
-    # Check if all required files are uploaded
-    all_files_uploaded = data_file is not None and u1_file is not None and u2_file is not None
-    
-    if all_files_uploaded:
-        st.success("✅ All CSV files uploaded!")
+    if file_uploaded:
+        st.success("✅ MEC.csv uploaded!")
         
         # Add a button to load/reload the data
-        if st.button("Load CSV Data", type="primary", use_container_width=True):
-            st.session_state.pop("csv_data_loaded", None)
+        if st.button("Load MEC Data", type="primary", use_container_width=True):
+            st.session_state.pop("mec_data_loaded", None)
             st.cache_data.clear()
             do_rerun()
     else:
-        missing = []
-        if data_file is None:
-            missing.append("DATA.csv")
-        if u1_file is None:
-            missing.append("U1.csv")
-        if u2_file is None:
-            missing.append("U2.csv")
-        
-        st.warning(f"Missing: {', '.join(missing)}")
-        st.info("Please upload all three CSV files to continue.")
+        st.warning("Please upload MEC.csv to continue.")
+        st.info("File should have headers: PROJECT, PROJECT DESCRIPTION, SCHEDULES, SCHEDULES DESCRIPTION, CATEGORY, PERSONNEL, TYPE OF RATE, UNIT RATE")
         st.stop()
 
-# Load CSV data from uploaded files
-if all_files_uploaded and "csv_data_loaded" not in st.session_state:
-    with st.spinner("Loading CSV data..."):
-        (
-            working,
-            data_tbl,
-            u1_tbl,
-            u2_tbl,
-            schedule_opts,
-            package_opts,
-            DISC_LIST,
-            PERSONNEL_LIST,
-        ) = load_csv_files_from_upload(data_file, u1_file, u2_file)
+# Load MEC data from uploaded file
+if file_uploaded and "mec_data_loaded" not in st.session_state:
+    with st.spinner("Loading MEC.csv data..."):
+        mec_df = load_mec_csv(mec_file)
+        
+        if mec_df.empty:
+            st.error("Failed to load MEC.csv. Please check the file format.")
+            st.stop()
+        
+        # Get schedule options
+        schedule_opts = []
+        if "SCHEDULES" in mec_df.columns:
+            s = get_col(mec_df, "SCHEDULES").dropna().astype(str).str.strip()
+            schedule_opts = sorted([v for v in s.unique().tolist() if v and v.lower() != 'nan'])
+
+        # Get personnel list
+        personnel_list = []
+        if "PERSONNEL" in mec_df.columns:
+            personnel_from_mec = get_col(mec_df, "PERSONNEL").dropna().astype(str).tolist()
+            personnel_list.extend(personnel_from_mec)
+        
+        # Add default personnel
+        for _, plist in DEFAULT_PERSONNEL.items():
+            personnel_list.extend(plist)
+        
+        # Clean and deduplicate
+        personnel_list = [p for p in personnel_list if p and p.lower() != 'nan']
+        personnel_list = sorted(set(personnel_list))
+
+        # Get unique rate types
+        rate_types = []
+        if "TYPE OF RATE" in mec_df.columns:
+            rate_from_mec = get_col(mec_df, "TYPE OF RATE").dropna().astype(str).str.strip().unique().tolist()
+            rate_types.extend(rate_from_mec)
+        
+        # Add standard rate types
+        standard_rates = ["Minimum", "Maximum", "Normalise", "AKER", "DAR", "MMC", "TUAH", "PRW", "PUSB"]
+        for rate in standard_rates:
+            if rate not in rate_types:
+                rate_types.append(rate)
+        
+        rate_types = sorted(set(rate_types))
         
         # Store in session state
-        st.session_state["working"] = working
-        st.session_state["data_tbl"] = data_tbl
-        st.session_state["u1_tbl"] = u1_tbl
-        st.session_state["u2_tbl"] = u2_tbl
+        st.session_state["mec_df"] = mec_df
         st.session_state["schedule_opts"] = schedule_opts
-        st.session_state["package_opts"] = package_opts
-        st.session_state["DISC_LIST"] = DISC_LIST
-        st.session_state["PERSONNEL_LIST"] = PERSONNEL_LIST
-        st.session_state["csv_data_loaded"] = True
+        st.session_state["PERSONNEL_LIST"] = personnel_list
+        st.session_state["RATE_TYPES"] = rate_types
+        st.session_state["mec_data_loaded"] = True
         
-        st.success("CSV data loaded successfully!")
+        st.sidebar.write("📊 Loaded Data:")
+        st.sidebar.write(f"✅ MEC.csv: {len(mec_df)} rows")
+        st.sidebar.write(f"✅ {len(schedule_opts)} schedules found")
+        
         do_rerun()
 
 # Retrieve from session state
-working = st.session_state.get("working", pd.DataFrame())
-data_tbl = st.session_state.get("data_tbl", pd.DataFrame())
-u1_tbl = st.session_state.get("u1_tbl", pd.DataFrame())
-u2_tbl = st.session_state.get("u2_tbl", pd.DataFrame())
+mec_df = st.session_state.get("mec_df", pd.DataFrame())
 schedule_opts = st.session_state.get("schedule_opts", [])
-package_opts = st.session_state.get("package_opts", ["U1", "U2"])
-DISC_LIST = st.session_state.get("DISC_LIST", list(DISCIPLINE_ROW_COUNTS.keys()))
 PERSONNEL_LIST = st.session_state.get("PERSONNEL_LIST", [])
+RATE_TYPES = st.session_state.get("RATE_TYPES", UNIT_TYPES)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Session defaults
+# Reset Functionality
 # ──────────────────────────────────────────────────────────────────────────────
-st.session_state.setdefault("page", "MAIN")
-st.session_state.setdefault("project_title", "")
-st.session_state.setdefault("cost_engineer", "")
-st.session_state.setdefault("tp_specialist", "")
-st.session_state.setdefault("project_date", None)
-st.session_state.setdefault("type_of_package", package_opts[0] if package_opts else "U1")
-st.session_state.setdefault("type_of_schedule", schedule_opts[0] if schedule_opts else "Schedule A")
-st.session_state.setdefault("rate_source", RATE_SOURCES[0])
-st.session_state.setdefault("kpbi_rate", 0.0)
+def reset_all():
+    """Reset all session state to default values"""
+    # Clear all session state except page and file-related data
+    keys_to_keep = ["page", "mec_df", "schedule_opts", "PERSONNEL_LIST", "RATE_TYPES", "mec_data_loaded"]
+    
+    for key in list(st.session_state.keys()):
+        if key not in keys_to_keep:
+            del st.session_state[key]
+    
+    # Reinitialize with defaults
+    initialize_defaults()
 
-# Initialize Personnel Table
-if GRID_KEY not in st.session_state:
-    rows = []
-    tmp_schedule = st.session_state["type_of_schedule"]
-    tmp_categories = build_category_options(tmp_schedule, st.session_state["rate_source"], data_tbl, u1_tbl, u2_tbl)
-    if not tmp_categories:
-        tmp_categories = B_D_CATEGORY_FALLBACK if is_usd(tmp_schedule) else AC_CATEGORIES
-    for disc, count in DISCIPLINE_ROW_COUNTS.items():
-        defaults = DEFAULT_PERSONNEL.get(disc, [])
-        for i in range(count):
-            personnel = defaults[i] if i < len(defaults) else (PERSONNEL_LIST[0] if PERSONNEL_LIST else "")
-            rows.append(
+
+def initialize_defaults():
+    """Initialize default values in session state"""
+    st.session_state.setdefault("project_title", "")
+    st.session_state.setdefault("cost_engineer", "")
+    st.session_state.setdefault("tp_specialist", "")
+    st.session_state.setdefault("project_date", None)
+    st.session_state.setdefault("type_of_package", "MEC")
+    st.session_state.setdefault("type_of_schedule", schedule_opts[0] if schedule_opts else "Schedule A")
+    st.session_state.setdefault("rate_source", "MEC.csv")
+    st.session_state.setdefault("kpbi_rate", 0.0)
+    
+    # Initialize Personnel Table
+    if GRID_KEY not in st.session_state:
+        rows = []
+        tmp_schedule = st.session_state["type_of_schedule"]
+        tmp_categories = build_category_options(tmp_schedule, mec_df)
+        if not tmp_categories:
+            tmp_categories = B_D_CATEGORY_FALLBACK if is_usd(tmp_schedule) else AC_CATEGORIES
+        for disc, count in DISCIPLINE_ROW_COUNTS.items():
+            defaults = DEFAULT_PERSONNEL.get(disc, [])
+            for i in range(count):
+                personnel = defaults[i] if i < len(defaults) else (PERSONNEL_LIST[0] if PERSONNEL_LIST else "")
+                rows.append(
+                    {
+                        "Swatch": DISCIPLINE_SWATCH.get(disc, "⬜"),
+                        "Discipline": disc,
+                        "Personnel": personnel,
+                        "Category": tmp_categories[0] if tmp_categories else "",
+                        "Type of Unit Rate": "Normalise",
+                        "Weightage (FTE)": 0.0,
+                        "Duration (months)": 1.0,
+                    }
+                )
+        st.session_state[GRID_KEY] = pd.DataFrame(rows)
+    
+    # Initialize Third Party & Non-Labour items
+    if THIRD_PARTY_KEY not in st.session_state:
+        third_party_rows = []
+        for category in THIRD_PARTY_CATEGORIES:
+            third_party_rows.append(
                 {
-                    "Swatch": DISCIPLINE_SWATCH.get(disc, "⬜"),
-                    "Discipline": disc,
-                    "Personnel": personnel,
-                    "Category": tmp_categories[0] if tmp_categories else "",
-                    "Type of Unit Rate": "Normalise",
-                    "Weightage (FTE)": 0.0,
-                    "Duration (months)": 1.0,
+                    "Category": category,
+                    "Description": "",
+                    "Basis": "% of Labour Cost",
+                    "Percentage": 0.0,
+                    "Fixed Amount": 0.0,
+                    "Remarks": ""
                 }
             )
-    st.session_state[GRID_KEY] = pd.DataFrame(rows)
+        st.session_state[THIRD_PARTY_KEY] = pd.DataFrame(third_party_rows)
+    
+    # Initialize Monthly Loading
+    if MONTHLY_LOADING_KEY not in st.session_state:
+        months = [f"Month {i+1:02d}" for i in range(12)]
+        monthly_data = {
+            "Month": months,
+            "Loading Factor (%)": [100.0] * 12,
+            "Weightage Distribution": [100.0/12] * 12
+        }
+        st.session_state[MONTHLY_LOADING_KEY] = pd.DataFrame(monthly_data)
+    
+    # Initialize saved projects
+    if SAVED_PROJECTS_KEY not in st.session_state:
+        st.session_state[SAVED_PROJECTS_KEY] = []
 
-# Initialize Third Party & Non-Labour items
-if THIRD_PARTY_KEY not in st.session_state:
-    third_party_rows = []
-    for category in THIRD_PARTY_CATEGORIES:
-        third_party_rows.append(
-            {
-                "Category": category,
-                "Description": "",
-                "Basis": "% of Labour Cost",
-                "Percentage": 0.0,
-                "Fixed Amount": 0.0,
-                "Remarks": ""
-            }
-        )
-    st.session_state[THIRD_PARTY_KEY] = pd.DataFrame(third_party_rows)
 
-# Initialize Monthly Loading
-if MONTHLY_LOADING_KEY not in st.session_state:
-    months = [f"Month {i+1:02d}" for i in range(12)]
-    monthly_data = {
-        "Month": months,
-        "Loading Factor (%)": [100.0] * 12,
-        "Weightage Distribution": [100.0/12] * 12
-    }
-    st.session_state[MONTHLY_LOADING_KEY] = pd.DataFrame(monthly_data)
-
-# Initialize saved projects
-if SAVED_PROJECTS_KEY not in st.session_state:
-    st.session_state[SAVED_PROJECTS_KEY] = []
+# Initialize defaults
+initialize_defaults()
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Rate lookup with proper column handling
+# Rate lookup with proper matching
 # ──────────────────────────────────────────────────────────────────────────────
 def _canonical_col(df: pd.DataFrame, name: str) -> pd.Series:
     """Get a canonical version of a column"""
@@ -810,79 +689,76 @@ def _canonical_col(df: pd.DataFrame, name: str) -> pd.Series:
     return s.astype(str).str.replace(NBSP, " ").str.strip().str.lower()
 
 
-def _relaxed_match(df: pd.DataFrame, discipline: str, personnel: str, category: str, schedule: Optional[str]) -> pd.DataFrame:
+def _relaxed_match(df: pd.DataFrame, discipline: str, personnel: str, category: str, schedule: Optional[str], rate_type: str) -> pd.DataFrame:
     """Find matching rows in dataframe with relaxed matching"""
     m = df.copy()
     
-    # Match discipline (for U1/U2 tables, this might be in Position column)
-    if "Position" in m.columns:
-        pos_s = _canonical_col(m, "Position")
-        disc_target = _canon_disc(discipline)
-        m = m[pos_s.str.contains(disc_target, na=False) | pos_s.isin([disc_target])]
-    
     # Match personnel
-    if "Personnel" in m.columns and personnel:
-        pers_s = _canonical_col(m, "Personnel")
+    if "PERSONNEL" in m.columns and personnel and not pd.isna(personnel):
+        pers_s = _canonical_col(m, "PERSONNEL")
         pers_target = str(personnel).strip().lower()
-        m = m[pers_s.str.contains(pers_target, na=False) | pers_s.isin([pers_target])]
+        # Try exact match first, then contains
+        exact_match = pers_s == pers_target
+        if exact_match.any():
+            m = m[exact_match]
+        else:
+            contains_match = pers_s.str.contains(pers_target, na=False)
+            if contains_match.any():
+                m = m[contains_match]
     
     # Match category
-    if "Category" in m.columns and category:
-        cat_s = _canonical_col(m, "Category")
+    if "CATEGORY" in m.columns and category and not pd.isna(category):
+        cat_s = _canonical_col(m, "CATEGORY")
         cat_target = str(category).strip().lower()
-        m = m[cat_s.str.contains(cat_target, na=False) | cat_s.isin([cat_target])]
+        # Try exact match first
+        exact_match = cat_s == cat_target
+        if exact_match.any():
+            m = m[exact_match]
+        else:
+            contains_match = cat_s.str.contains(cat_target, na=False)
+            if contains_match.any():
+                m = m[contains_match]
     
     # Match schedule
-    if schedule and "Schedules" in m.columns:
-        sch_s = _canonical_col(m, "Schedules")
+    if schedule and "SCHEDULES" in m.columns:
+        sch_s = _canonical_col(m, "SCHEDULES")
         tag = _canon_sched_tag(schedule)
-        m = m[sch_s.str.contains(tag, na=False) | sch_s.isin([tag])]
+        contains_match = sch_s.str.contains(tag, na=False)
+        if contains_match.any():
+            m = m[contains_match]
+    
+    # Match rate type
+    if "TYPE OF RATE" in m.columns and rate_type and not pd.isna(rate_type):
+        rate_s = _canonical_col(m, "TYPE OF RATE")
+        rate_target = str(rate_type).strip().lower()
+        exact_match = rate_s == rate_target
+        if exact_match.any():
+            m = m[exact_match]
+        else:
+            contains_match = rate_s.str.contains(rate_target, na=False)
+            if contains_match.any():
+                m = m[contains_match]
 
     return m
 
 
 def get_rate(
-    rate_source: str,
-    data_tbl: pd.DataFrame,
-    u1_tbl: pd.DataFrame,
-    u2_tbl: pd.DataFrame,
+    mec_df: pd.DataFrame,
     discipline: str,
     personnel: str,
     category: str,
     unit_type: str,
     schedule: str,
 ) -> float:
-    """Get rate from CSV files with proper column mapping"""
+    """Get rate from MEC.csv"""
     
-    # Select the appropriate sheet
-    if rate_source == "Data":
-        sheet = data_tbl
-        # For Data sheet, use the unit rate column directly
-        if sheet is not None and not sheet.empty:
-            # Find matching rows
-            matches = _relaxed_match(sheet, discipline, personnel, category, schedule)
-            if not matches.empty and "unit rate" in matches.columns:
-                return _to_float_safe(get_col(matches, "unit rate").iloc[0])
-    
-    elif rate_source == "U1":
-        sheet = u1_tbl
-    elif rate_source == "U2":
-        sheet = u2_tbl
-    else:
-        return 0.0
-    
-    # For U1/U2 sheets, map the displayed rate type to actual column
-    if sheet is not None and not sheet.empty:
-        # Get the actual column name from mapping
-        actual_column = RATE_COLUMN_MAPPING.get(unit_type)
+    if mec_df is not None and not mec_df.empty:
+        # Find matching rows
+        matches = _relaxed_match(mec_df, discipline, personnel, category, schedule, unit_type)
         
-        if actual_column:
-            # Find matching rows
-            matches = _relaxed_match(sheet, discipline, personnel, category, schedule)
-            
-            if not matches.empty and actual_column in matches.columns:
-                rate_val = get_col(matches, actual_column).iloc[0]
-                return _to_float_safe(rate_val)
+        if not matches.empty and "UNIT RATE" in matches.columns:
+            rate_val = get_col(matches, "UNIT RATE").iloc[0]
+            return _to_float_safe(rate_val)
     
     return 0.0
 
@@ -890,8 +766,8 @@ def get_rate(
 # ──────────────────────────────────────────────────────────────────────────────
 # Calculations
 # ──────────────────────────────────────────────────────────────────────────────
-def calculate_labour_costs(grid_df: pd.DataFrame, currency: str, rate_source: str, type_of_schedule: str) -> pd.DataFrame:
-    """Calculate labour costs from personnel table"""
+def calculate_labour_costs(grid_df: pd.DataFrame, currency: str, type_of_schedule: str) -> pd.DataFrame:
+    """Calculate labour costs from personnel table using MEC.csv"""
     if grid_df.empty:
         return pd.DataFrame(
             columns=[
@@ -899,7 +775,6 @@ def calculate_labour_costs(grid_df: pd.DataFrame, currency: str, rate_source: st
                 "Personnel",
                 "Category",
                 "Type of Unit Rate",
-                "Rate Source",
                 f"Unit Rate ({currency})",
                 "Weightage (FTE)",
                 "Duration (months)",
@@ -917,15 +792,11 @@ def calculate_labour_costs(grid_df: pd.DataFrame, currency: str, rate_source: st
             row["Category"],
             row["Type of Unit Rate"],
             type_of_schedule,
-            rate_source,
         )
         if key in cache:
             return cache[key]
         val = get_rate(
-            rate_source,
-            data_tbl,
-            u1_tbl,
-            u2_tbl,
+            mec_df,
             key[0],
             key[1],
             key[2],
@@ -940,7 +811,6 @@ def calculate_labour_costs(grid_df: pd.DataFrame, currency: str, rate_source: st
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").astype("float32")
 
-    df["Rate Source"] = rate_source
     df[f"Unit Rate ({currency})"] = df.apply(rate_for, axis=1).astype("float32")
     df["Total Hours"] = (
         df["Weightage (FTE)"].astype("float32") * float(HOURS_PER_MONTH) * df["Duration (months)"].astype("float32")
@@ -953,7 +823,6 @@ def calculate_labour_costs(grid_df: pd.DataFrame, currency: str, rate_source: st
             "Personnel",
             "Category",
             "Type of Unit Rate",
-            "Rate Source",
             f"Unit Rate ({currency})",
             "Weightage (FTE)",
             "Duration (months)",
@@ -1058,11 +927,10 @@ def compute_totals(labour_df: pd.DataFrame, third_party_df: pd.DataFrame,
 def save_current_project():
     """Save current project configuration and results for later comparison"""
     type_of_schedule = st.session_state["type_of_schedule"]
-    rate_source = st.session_state["rate_source"]
     currency = currency_for(type_of_schedule)
     kpbi_rate = st.session_state["kpbi_rate"]
     
-    labour_df = calculate_labour_costs(st.session_state[GRID_KEY], currency, rate_source, type_of_schedule)
+    labour_df = calculate_labour_costs(st.session_state[GRID_KEY], currency, type_of_schedule)
     total_labour = float(labour_df[f"Labour Cost ({currency})"].sum()) if not labour_df.empty else 0.0
     third_party_df = calculate_third_party_costs(st.session_state[THIRD_PARTY_KEY], total_labour, currency)
     totals = compute_totals(labour_df, third_party_df, st.session_state[MONTHLY_LOADING_KEY], currency, kpbi_rate)
@@ -1072,9 +940,7 @@ def save_current_project():
         "name": st.session_state["project_title"] or f"Project_{datetime.now().strftime('%Y%m%d_%H%M')}",
         "timestamp": datetime.now().isoformat(),
         "project_title": st.session_state["project_title"],
-        "type_of_package": st.session_state["type_of_package"],
         "type_of_schedule": type_of_schedule,
-        "rate_source": rate_source,
         "currency": currency,
         "kpbi_rate": kpbi_rate,
         "total_hours": totals["total_hours"],
@@ -1109,7 +975,7 @@ def compare_projects(project1, project2):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Export to Excel (simplified for brevity)
+# Export to Excel (simplified)
 # ──────────────────────────────────────────────────────────────────────────────
 def to_excel_bytes(main_meta: pd.DataFrame, totals: dict, labour_df: pd.DataFrame, 
                    third_party_df: pd.DataFrame, monthly_df: pd.DataFrame, 
@@ -1129,7 +995,7 @@ def to_excel_bytes(main_meta: pd.DataFrame, totals: dict, labour_df: pd.DataFram
     ws.merge_cells("B2:I3")
     ws["B2"].value = "MAJOR ENGINEERING CONTRACT (MEC) TOOL FOR CE UPSTREAM"
     
-    # ... (Excel formatting code - can be added later)
+    # ... (Excel formatting code - can be expanded later)
     
     out = io.BytesIO()
     wb.save(out)
@@ -1172,7 +1038,7 @@ def render_navigation():
 
 def reset_grid():
     tmp_schedule = st.session_state["type_of_schedule"]
-    categories = build_category_options(tmp_schedule, st.session_state["rate_source"], data_tbl, u1_tbl, u2_tbl)
+    categories = build_category_options(tmp_schedule, mec_df)
     if not categories:
         categories = B_D_CATEGORY_FALLBACK if is_usd(tmp_schedule) else AC_CATEGORIES
     rows = []
@@ -1195,7 +1061,7 @@ def reset_grid():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Page renderers (simplified for brevity - keep as before)
+# Page renderers
 # ──────────────────────────────────────────────────────────────────────────────
 def render_main():
     st.markdown(
@@ -1208,10 +1074,18 @@ def render_main():
         unsafe_allow_html=True
     )
     
-    st.caption(f"📁 Uploaded CSV Files: DATA.csv, U1.csv, U2.csv")
+    st.caption(f"📁 Uploaded: MEC.csv ({len(mec_df)} rows)")
 
     st.markdown("<hr style='margin: 2rem 0;'/>", unsafe_allow_html=True)
     st.header("Main Page")
+
+    # Reset button at top right
+    col1, col2, col3 = st.columns([3, 1, 1])
+    with col3:
+        if st.button("🔄 New Project", type="secondary", use_container_width=True, help="Start a new project with fresh inputs"):
+            reset_all()
+            st.success("Started new project!")
+            do_rerun()
 
     mp1, mp2 = st.columns(2)
     with mp1:
@@ -1236,18 +1110,8 @@ def render_main():
             "Date", 
             value=st.session_state["project_date"]
         )
-        st.session_state["type_of_package"] = st.selectbox(
-            "Type of Package",
-            package_opts,
-            index=max(
-                0,
-                package_opts.index(st.session_state["type_of_package"])
-                if st.session_state["type_of_package"] in package_opts
-                else 0,
-            )
-        )
         st.session_state["type_of_schedule"] = st.selectbox(
-            "Type of Schedule (from DATA.csv)",
+            "Type of Schedule (from MEC.csv)",
             schedule_opts if schedule_opts else ["Schedule A", "Schedule B", "Schedule C", "Schedule D"],
             index=0
             if not schedule_opts
@@ -1261,11 +1125,7 @@ def render_main():
 
     rs1, rs2 = st.columns([1, 2])
     with rs1:
-        package_to_rate = {"U1": "U1", "U2": "U2"}
-        default_rate = package_to_rate.get(st.session_state["type_of_package"], "Data")
-        st.session_state["rate_source"] = st.radio(
-            "Rate Source", RATE_SOURCES, index=RATE_SOURCES.index(default_rate), horizontal=True
-        )
+        st.info("Rate Source: MEC.csv (single source)")
     with rs2:
         st.markdown(
             f"""
@@ -1310,10 +1170,9 @@ def render_main():
 
 def render_table():
     type_of_schedule = st.session_state["type_of_schedule"]
-    rate_source = st.session_state["rate_source"]
     currency = currency_for(type_of_schedule)
 
-    category_options_global = build_category_options(type_of_schedule, rate_source, data_tbl, u1_tbl, u2_tbl)
+    category_options_global = build_category_options(type_of_schedule, mec_df)
     if not category_options_global:
         category_options_global = B_D_CATEGORY_FALLBACK if is_usd(type_of_schedule) else AC_CATEGORIES
 
@@ -1344,7 +1203,7 @@ def render_table():
             st.session_state[GRID_KEY] = df
             do_rerun()
     with c_type:
-        new_type = st.selectbox("Type of Unit Rate for ALL", UNIT_TYPES, key="bulk_type")
+        new_type = st.selectbox("Type of Unit Rate for ALL", RATE_TYPES, key="bulk_type")
         if st.button("Apply type", use_container_width=True):
             df = st.session_state[GRID_KEY].copy()
             df["Type of Unit Rate"] = st.session_state["bulk_type"]
@@ -1429,7 +1288,7 @@ def render_table():
         width=220,
         editable=True,
         cellEditor="agSelectCellEditor",
-        cellEditorParams={"values": UNIT_TYPES},
+        cellEditorParams={"values": RATE_TYPES},
     )
     gb.configure_column("Weightage (FTE)", type=["numericColumn"], width=170, editable=True)
     gb.configure_column("Duration (months)", type=["numericColumn"], width=170, editable=True)
@@ -1466,8 +1325,13 @@ function(params) {
 
     # Labour Cost Preview
     st.subheader("Labour Cost Preview")
-    labour_df = calculate_labour_costs(st.session_state[GRID_KEY], currency, rate_source, type_of_schedule)
+    labour_df = calculate_labour_costs(st.session_state[GRID_KEY], currency, type_of_schedule)
     total_labour = labour_df[f"Labour Cost ({currency})"].sum() if not labour_df.empty else 0
+    
+    # Display rates found for debugging
+    if not labour_df.empty:
+        with st.expander("Debug: View rates found"):
+            st.dataframe(labour_df[["Discipline", "Personnel", "Category", "Type of Unit Rate", f"Unit Rate ({currency})"]])
     
     st.markdown(
         f"""
@@ -1480,7 +1344,9 @@ function(params) {
     )
 
 
-# Other page renderers (keep as before)
+# Other page renderers (render_third_party, render_loading, render_totals, render_summary, render_compare)
+# [Keep these functions exactly as they were in the previous version, just update any rate_source references]
+
 def render_third_party():
     st.header("💰 Third Party & Non-Labour Costs")
     st.caption("Add third party services, equipment rental, software, and other non-labour costs")
@@ -1490,7 +1356,6 @@ def render_third_party():
     labour_df = calculate_labour_costs(
         st.session_state[GRID_KEY], 
         currency, 
-        st.session_state["rate_source"], 
         st.session_state["type_of_schedule"]
     )
     total_labour = labour_df[f"Labour Cost ({currency})"].sum() if not labour_df.empty else 0
@@ -1630,7 +1495,6 @@ def render_loading():
     labour_df = calculate_labour_costs(
         st.session_state[GRID_KEY], 
         currency, 
-        st.session_state["rate_source"], 
         st.session_state["type_of_schedule"]
     )
     total_labour = labour_df[f"Labour Cost ({currency})"].sum() if not labour_df.empty else 0
@@ -1770,11 +1634,10 @@ def render_loading():
 
 def render_totals():
     type_of_schedule = st.session_state["type_of_schedule"]
-    rate_source = st.session_state["rate_source"]
     currency = currency_for(type_of_schedule)
     kpbi_rate = st.session_state["kpbi_rate"]
 
-    labour_df = calculate_labour_costs(st.session_state[GRID_KEY], currency, rate_source, type_of_schedule)
+    labour_df = calculate_labour_costs(st.session_state[GRID_KEY], currency, type_of_schedule)
     total_labour = float(labour_df[f"Labour Cost ({currency})"].sum()) if not labour_df.empty else 0.0
     
     third_party_df = calculate_third_party_costs(st.session_state[THIRD_PARTY_KEY], total_labour, currency)
@@ -1940,7 +1803,6 @@ def render_totals():
 
 def render_summary():
     type_of_schedule = st.session_state["type_of_schedule"]
-    rate_source = st.session_state["rate_source"]
     currency = currency_for(type_of_schedule)
     kpbi_rate = st.session_state["kpbi_rate"]
 
@@ -1951,23 +1813,21 @@ def render_summary():
                 "Date": str(st.session_state["project_date"]),
                 "Cost Engineer": st.session_state["cost_engineer"],
                 "TP/Specialist": st.session_state["tp_specialist"],
-                "Type of Package": st.session_state["type_of_package"],
                 "Type of Schedule": st.session_state["type_of_schedule"],
-                "Rate Source Used": rate_source,
                 "Currency": currency,
                 "KPBI Rate": kpbi_rate,
-                "Hours per Month (constant)": HOURS_PER_MONTH,
+                "Hours per Month": HOURS_PER_MONTH,
             }
         ]
     )
 
-    labour_df = calculate_labour_costs(st.session_state[GRID_KEY], currency, rate_source, type_of_schedule)
+    labour_df = calculate_labour_costs(st.session_state[GRID_KEY], currency, type_of_schedule)
     total_labour = float(labour_df[f"Labour Cost ({currency})"].sum()) if not labour_df.empty else 0.0
     
     third_party_df = calculate_third_party_costs(st.session_state[THIRD_PARTY_KEY], total_labour, currency)
     totals = compute_totals(labour_df, third_party_df, st.session_state[MONTHLY_LOADING_KEY], currency, kpbi_rate)
 
-    st.subheader("Main Page (entered)")
+    st.subheader("Project Information")
     st.dataframe(main_meta, use_container_width=True)
 
     st.subheader("Cost Comparison: Method A vs Method B")
