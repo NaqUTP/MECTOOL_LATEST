@@ -1,5 +1,5 @@
 # streamlit_app.py
-# MEC TOOL – Streamlit app (Single CSV version with reset functionality)
+# MEC TOOL – Streamlit app (Single CSV version with KPBI rate from CSV)
 # Author: Ahmad Naquib Syahmee Masror (Dev/Upstream)
 # Date: 2025-10-29
 
@@ -216,13 +216,11 @@ def init_session_state():
     if "project_date" not in st.session_state:
         st.session_state["project_date"] = None
     if "type_of_package" not in st.session_state:
-        st.session_state["type_of_package"] = "MEC"
+        st.session_state["type_of_package"] = "U1"
     if "type_of_schedule" not in st.session_state:
         st.session_state["type_of_schedule"] = "Schedule A"
     if "rate_source" not in st.session_state:
         st.session_state["rate_source"] = "MEC.csv"
-    if "kpbi_rate" not in st.session_state:
-        st.session_state["kpbi_rate"] = 0.0
     
     # DataFrames
     if GRID_KEY not in st.session_state:
@@ -455,7 +453,7 @@ def build_category_options(schedule: str, mec_df) -> List[str]:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Grid Initialization Functions - Define BEFORE they are called
+# Grid Initialization Functions
 # ──────────────────────────────────────────────────────────────────────────────
 def initialize_default_grids():
     """Initialize default grids after data is loaded"""
@@ -557,13 +555,12 @@ def reset_all():
     st.session_state["cost_engineer"] = ""
     st.session_state["tp_specialist"] = ""
     st.session_state["project_date"] = None
-    st.session_state["type_of_package"] = "MEC"
+    st.session_state["type_of_package"] = "U1"
     if schedule_opts:
         st.session_state["type_of_schedule"] = schedule_opts[0]
     else:
         st.session_state["type_of_schedule"] = "Schedule A"
     st.session_state["rate_source"] = "MEC.csv"
-    st.session_state["kpbi_rate"] = 0.0
     
     # Reinitialize grids
     initialize_default_grids()
@@ -574,7 +571,7 @@ def reset_all():
 # ──────────────────────────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False, ttl=600)
 def load_mec_csv(file_obj):
-    """Load MEC.csv with specific header format"""
+    """Load MEC.csv with specific header format including KPBI UNIT RATE"""
     try:
         if file_obj is not None:
             file_obj.seek(0)
@@ -596,10 +593,14 @@ def load_mec_csv(file_obj):
                     rename_map[col] = 'CATEGORY'
                 elif 'personnel' in col_lower:
                     rename_map[col] = 'PERSONNEL'
+                elif 'kpbi unit rate' in col_lower or 'kpbi' in col_lower:
+                    rename_map[col] = 'KPBI UNIT RATE'
                 elif 'type of rate' in col_lower:
                     rename_map[col] = 'TYPE OF RATE'
                 elif 'unit rate' in col_lower:
                     rename_map[col] = 'UNIT RATE'
+                elif 'package' in col_lower:
+                    rename_map[col] = 'PACKAGE'
             
             df = df.rename(columns=rename_map)
             return df
@@ -615,7 +616,7 @@ def load_mec_csv(file_obj):
 with st.sidebar:
     st.subheader("📁 Upload MEC.csv")
     st.caption("Upload the consolidated MEC.csv file")
-    st.caption("Headers: PROJECT, PROJECT DESCRIPTION, SCHEDULES, SCHEDULES DESCRIPTION, CATEGORY, PERSONNEL, TYPE OF RATE, UNIT RATE")
+    st.caption("Headers: PROJECT, PROJECT DESCRIPTION, SCHEDULES, SCHEDULES DESCRIPTION, CATEGORY, PERSONNEL, KPBI UNIT RATE, TYPE OF RATE, UNIT RATE, PACKAGE")
     
     mec_file = st.file_uploader(
         "MEC.csv",
@@ -686,6 +687,7 @@ if mec_file is not None and not st.session_state["mec_data_loaded"]:
         st.sidebar.write("📊 Loaded Data:")
         st.sidebar.write(f"✅ MEC.csv: {len(mec_df)} rows")
         st.sidebar.write(f"✅ {len(schedule_opts)} schedules found")
+        st.sidebar.write(f"✅ KPBI UNIT RATE column found: {'KPBI UNIT RATE' in mec_df.columns}")
         
         # Now call initialize_default_grids after data is loaded
         initialize_default_grids()
@@ -711,11 +713,26 @@ def _canonical_col(df: pd.DataFrame, name: str) -> pd.Series:
     return s.astype(str).str.replace(NBSP, " ").str.strip().str.lower()
 
 
-def _relaxed_match(df: pd.DataFrame, personnel: str, category: str, schedule: Optional[str], rate_type: str) -> pd.DataFrame:
+def _relaxed_match(df: pd.DataFrame, personnel: str, category: str, schedule: Optional[str], 
+                   rate_type: str, package: str) -> pd.DataFrame:
+    """Find matching rows in dataframe with relaxed matching, including package filter"""
     if df.empty:
         return df
     
     m = df.copy()
+    
+    # Match package (U1 or U2)
+    if "PACKAGE" in m.columns and package and str(package).strip():
+        package_s = _canonical_col(m, "PACKAGE")
+        if not package_s.empty:
+            package_target = str(package).strip().lower()
+            exact_match = package_s == package_target
+            if exact_match.any():
+                m = m[exact_match]
+            else:
+                contains_match = package_s.str.contains(package_target, na=False)
+                if contains_match.any():
+                    m = m[contains_match]
     
     # Match personnel
     if "PERSONNEL" in m.columns and personnel and str(personnel).strip():
@@ -768,20 +785,35 @@ def _relaxed_match(df: pd.DataFrame, personnel: str, category: str, schedule: Op
     return m
 
 
-def get_rate(mec_df: pd.DataFrame, personnel: str, category: str, unit_type: str, schedule: str) -> float:
-    """Get rate from MEC.csv"""
+def get_rate(mec_df: pd.DataFrame, personnel: str, category: str, unit_type: str, 
+             schedule: str, package: str) -> float:
+    """Get rate from MEC.csv with package filter"""
     if mec_df is not None and not mec_df.empty:
-        matches = _relaxed_match(mec_df, personnel, category, schedule, unit_type)
+        matches = _relaxed_match(mec_df, personnel, category, schedule, unit_type, package)
         if not matches.empty and "UNIT RATE" in matches.columns:
             rate_val = get_col(matches, "UNIT RATE").iloc[0]
             return _to_float_safe(rate_val)
     return 0.0
 
 
+def get_kpbi_rate(mec_df: pd.DataFrame, personnel: str, category: str, 
+                  schedule: str, package: str) -> float:
+    """Get KPBI rate from MEC.csv for Method B"""
+    if mec_df is not None and not mec_df.empty:
+        # KPBI rate doesn't depend on rate type, just personnel, category, schedule, package
+        matches = _relaxed_match(mec_df, personnel, category, schedule, "", package)
+        if not matches.empty and "KPBI UNIT RATE" in matches.columns:
+            kpbi_val = get_col(matches, "KPBI UNIT RATE").iloc[0]
+            return _to_float_safe(kpbi_val)
+    return 0.0
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Calculation Functions
 # ──────────────────────────────────────────────────────────────────────────────
-def calculate_labour_costs(grid_df: pd.DataFrame, currency: str, type_of_schedule: str) -> pd.DataFrame:
+def calculate_labour_costs(grid_df: pd.DataFrame, currency: str, type_of_schedule: str, 
+                          type_of_package: str) -> pd.DataFrame:
+    """Calculate labour costs from personnel table using MEC.csv with package filter"""
     if grid_df.empty:
         return pd.DataFrame(columns=[
             "Discipline", "Personnel", "Category", "Type of Unit Rate",
@@ -792,10 +824,11 @@ def calculate_labour_costs(grid_df: pd.DataFrame, currency: str, type_of_schedul
     cache = {}
 
     def rate_for(row):
-        key = (row["Personnel"], row["Category"], row["Type of Unit Rate"], type_of_schedule)
+        key = (row["Personnel"], row["Category"], row["Type of Unit Rate"], 
+               type_of_schedule, type_of_package)
         if key in cache:
             return cache[key]
-        val = get_rate(mec_df, key[0], key[1], key[2], key[3])
+        val = get_rate(mec_df, key[0], key[1], key[2], key[3], key[4])
         cache[key] = val
         return val
 
@@ -809,6 +842,39 @@ def calculate_labour_costs(grid_df: pd.DataFrame, currency: str, type_of_schedul
     df[f"Labour Cost ({currency})"] = df[f"Unit Rate ({currency})"] * df["Total Hours"]
 
     return df
+
+
+def calculate_kpbi_labour_costs(grid_df: pd.DataFrame, currency: str, type_of_schedule: str, 
+                               type_of_package: str) -> pd.DataFrame:
+    """Calculate labour costs using KPBI rates from MEC.csv for Method B"""
+    if grid_df.empty:
+        return pd.DataFrame(columns=[
+            "Discipline", "Personnel", "Category",
+            f"KPBI Rate ({currency})", "Weightage (FTE)", "Duration (months)",
+            "Total Hours", f"Labour Cost ({currency})",
+        ])
+
+    cache = {}
+
+    def kpbi_rate_for(row):
+        key = (row["Personnel"], row["Category"], type_of_schedule, type_of_package)
+        if key in cache:
+            return cache[key]
+        val = get_kpbi_rate(mec_df, key[0], key[1], key[2], key[3])
+        cache[key] = val
+        return val
+
+    df = grid_df.copy()
+    for col in ["Weightage (FTE)", "Duration (months)"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").astype("float32")
+
+    df[f"KPBI Rate ({currency})"] = df.apply(kpbi_rate_for, axis=1).astype("float32")
+    df["Total Hours"] = df["Weightage (FTE)"] * HOURS_PER_MONTH * df["Duration (months)"]
+    df[f"Labour Cost ({currency})"] = df[f"KPBI Rate ({currency})"] * df["Total Hours"]
+
+    return df[["Discipline", "Personnel", "Category", f"KPBI Rate ({currency})", 
+               "Weightage (FTE)", "Duration (months)", "Total Hours", f"Labour Cost ({currency})"]]
 
 
 def calculate_third_party_costs(df: pd.DataFrame, total_labour: float, currency: str) -> pd.DataFrame:
@@ -858,12 +924,13 @@ def apply_monthly_loading(labour_df: pd.DataFrame, third_party_df: pd.DataFrame,
     }
 
 
-def compute_totals(labour_df: pd.DataFrame, third_party_df: pd.DataFrame, 
-                  monthly_df: pd.DataFrame, currency: str, kpbi_rate: float) -> Dict:
+def compute_totals(labour_df: pd.DataFrame, kpbi_labour_df: pd.DataFrame, third_party_df: pd.DataFrame, 
+                  monthly_df: pd.DataFrame, currency: str) -> Dict:
+    """Compute totals with Method A (Exact rates) and Method B (KPBI rates from CSV)"""
     total_labour_exact = float(labour_df[f"Labour Cost ({currency})"].sum()) if not labour_df.empty else 0.0
     total_hours = float(labour_df["Total Hours"].sum()) if not labour_df.empty else 0.0
     
-    total_labour_kpbi = total_hours * kpbi_rate if kpbi_rate > 0 else 0.0
+    total_labour_kpbi = float(kpbi_labour_df[f"Labour Cost ({currency})"].sum()) if not kpbi_labour_df.empty else 0.0
     total_third_party = float(third_party_df[f"Cost ({currency})"].sum()) if not third_party_df.empty else 0.0
     
     total_exact = total_labour_exact + total_third_party
@@ -886,7 +953,6 @@ def compute_totals(labour_df: pd.DataFrame, third_party_df: pd.DataFrame,
         "total_third_party": total_third_party,
         "total_exact": total_exact,
         "total_kpbi": total_kpbi,
-        "kpbi_rate": kpbi_rate,
         "discipline_totals": discipline_totals,
         "monthly_breakdown": monthly_breakdown
     }
@@ -897,13 +963,14 @@ def compute_totals(labour_df: pd.DataFrame, third_party_df: pd.DataFrame,
 # ──────────────────────────────────────────────────────────────────────────────
 def save_current_project():
     type_of_schedule = st.session_state["type_of_schedule"]
+    type_of_package = st.session_state["type_of_package"]
     currency = currency_for(type_of_schedule)
-    kpbi_rate = st.session_state["kpbi_rate"]
     
-    labour_df = calculate_labour_costs(st.session_state[GRID_KEY], currency, type_of_schedule)
+    labour_df = calculate_labour_costs(st.session_state[GRID_KEY], currency, type_of_schedule, type_of_package)
+    kpbi_labour_df = calculate_kpbi_labour_costs(st.session_state[GRID_KEY], currency, type_of_schedule, type_of_package)
     total_labour = float(labour_df[f"Labour Cost ({currency})"].sum()) if not labour_df.empty else 0.0
     third_party_df = calculate_third_party_costs(st.session_state[THIRD_PARTY_KEY], total_labour, currency)
-    totals = compute_totals(labour_df, third_party_df, st.session_state[MONTHLY_LOADING_KEY], currency, kpbi_rate)
+    totals = compute_totals(labour_df, kpbi_labour_df, third_party_df, st.session_state[MONTHLY_LOADING_KEY], currency)
     
     project_data = {
         "id": datetime.now().strftime("%Y%m%d_%H%M%S"),
@@ -911,8 +978,8 @@ def save_current_project():
         "timestamp": datetime.now().isoformat(),
         "project_title": st.session_state["project_title"],
         "type_of_schedule": type_of_schedule,
+        "type_of_package": type_of_package,
         "currency": currency,
-        "kpbi_rate": kpbi_rate,
         "total_hours": totals["total_hours"],
         "total_labour_exact": totals["total_labour_exact"],
         "total_labour_kpbi": totals["total_labour_kpbi"],
@@ -921,6 +988,7 @@ def save_current_project():
         "total_kpbi": totals["total_kpbi"],
         "discipline_totals": totals["discipline_totals"].to_dict('records') if not totals["discipline_totals"].empty else [],
         "labour_line_items": labour_df.to_dict('records'),
+        "kpbi_labour_line_items": kpbi_labour_df.to_dict('records'),
         "third_party_items": third_party_df.to_dict('records'),
         "personnel_count": len(st.session_state[GRID_KEY]),
         "disciplines_used": st.session_state[GRID_KEY]["Discipline"].nunique()
@@ -945,8 +1013,8 @@ def compare_projects(p1, p2):
 # Excel Export Function
 # ──────────────────────────────────────────────────────────────────────────────
 def to_excel_bytes(main_meta: pd.DataFrame, totals: dict, labour_df: pd.DataFrame, 
-                   third_party_df: pd.DataFrame, monthly_df: pd.DataFrame, 
-                   schedule_label: str, currency: str):
+                   kpbi_labour_df: pd.DataFrame, third_party_df: pd.DataFrame, 
+                   monthly_df: pd.DataFrame, schedule_label: str, currency: str):
     from openpyxl import Workbook
     from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 
@@ -969,13 +1037,21 @@ def to_excel_bytes(main_meta: pd.DataFrame, totals: dict, labour_df: pd.DataFram
         ws.cell(row=row, column=3, value=value)
         row += 1
     
-    # Labour Costs Sheet
-    ws2 = wb.create_sheet("Labour Costs")
+    # Labour Costs Sheet (Method A)
+    ws2 = wb.create_sheet("Labour Costs - Method A")
     for c, col in enumerate(labour_df.columns, 1):
         ws2.cell(row=1, column=c, value=col)
     for r, row in labour_df.iterrows():
         for c, value in enumerate(row, 1):
             ws2.cell(row=r+2, column=c, value=value)
+    
+    # Labour Costs Sheet (Method B - KPBI)
+    ws2b = wb.create_sheet("Labour Costs - Method B (KPBI)")
+    for c, col in enumerate(kpbi_labour_df.columns, 1):
+        ws2b.cell(row=1, column=c, value=col)
+    for r, row in kpbi_labour_df.iterrows():
+        for c, value in enumerate(row, 1):
+            ws2b.cell(row=r+2, column=c, value=value)
     
     # Third Party Sheet
     ws3 = wb.create_sheet("Third Party")
@@ -988,9 +1064,9 @@ def to_excel_bytes(main_meta: pd.DataFrame, totals: dict, labour_df: pd.DataFram
     # Monthly Loading Sheet
     ws4 = wb.create_sheet("Monthly Loading")
     monthly_with_costs = monthly_df.copy()
-    monthly_with_costs[f"Labour Cost ({currency})"] = [totals["monthly_breakdown"]["monthly_labour"].get(m, 0) for m in monthly_df["Month"]]
+    monthly_with_costs[f"Labour A ({currency})"] = [totals["monthly_breakdown"]["monthly_labour"].get(m, 0) for m in monthly_df["Month"]]
     monthly_with_costs[f"Third Party ({currency})"] = [totals["monthly_breakdown"]["monthly_third_party"].get(m, 0) for m in monthly_df["Month"]]
-    monthly_with_costs[f"Total ({currency})"] = [totals["monthly_breakdown"]["total_by_month"].get(m, 0) for m in monthly_df["Month"]]
+    monthly_with_costs[f"Total A ({currency})"] = [totals["monthly_breakdown"]["total_by_month"].get(m, 0) for m in monthly_df["Month"]]
     
     for c, col in enumerate(monthly_with_costs.columns, 1):
         ws4.cell(row=1, column=c, value=col)
@@ -1036,6 +1112,8 @@ def render_main():
     
     if not mec_df.empty:
         st.caption(f"📁 Loaded: MEC.csv ({len(mec_df)} rows)")
+        has_kpbi = "KPBI UNIT RATE" in mec_df.columns
+        st.caption(f"✅ KPBI rates available: {has_kpbi}")
 
     st.markdown("<hr style='margin: 2rem 0;'/>", unsafe_allow_html=True)
     st.header("Main Page")
@@ -1056,6 +1134,7 @@ def render_main():
     with mp2:
         st.session_state["project_date"] = st.date_input("Date", value=st.session_state["project_date"])
         
+        # Schedule selection
         if schedule_opts:
             current = st.session_state["type_of_schedule"]
             if current not in schedule_opts:
@@ -1069,8 +1148,15 @@ def render_main():
             st.session_state["type_of_schedule"] = st.selectbox(
                 "Type of Schedule", ["Schedule A", "Schedule B", "Schedule C", "Schedule D"], index=0
             )
+        
+        # Package selection (U1/U2)
+        st.session_state["type_of_package"] = st.selectbox(
+            "Package Type",
+            ["U1", "U2"],
+            index=0 if st.session_state["type_of_package"] == "U1" else 1
+        )
 
-    st.info("📊 Rate Source: MEC.csv (single source)")
+    st.info(f"📊 Rate Source: MEC.csv - Package: {st.session_state['type_of_package']}")
     
     st.markdown(
         f"""
@@ -1081,11 +1167,6 @@ def render_main():
         </div>
         """,
         unsafe_allow_html=True
-    )
-
-    st.subheader("KPBI Rate Settings (Method B)")
-    st.session_state["kpbi_rate"] = st.number_input(
-        "KPBI Rate (per hour)", min_value=0.0, value=st.session_state["kpbi_rate"], step=10.0, format="%.2f"
     )
 
     c1, c2, c3 = st.columns(3)
@@ -1106,13 +1187,14 @@ def render_main():
 
 def render_table():
     type_of_schedule = st.session_state["type_of_schedule"]
+    type_of_package = st.session_state["type_of_package"]
     currency = currency_for(type_of_schedule)
 
     categories = build_category_options(type_of_schedule, mec_df)
     if not categories:
         categories = B_D_CATEGORY_FALLBACK if is_usd(type_of_schedule) else AC_CATEGORIES
 
-    st.header(f"Personnel Table — Currency: {currency}")
+    st.header(f"Personnel Table — Currency: {currency} (Package: {type_of_package})")
 
     df = st.session_state[GRID_KEY].copy()
     if df.empty:
@@ -1228,7 +1310,7 @@ def render_table():
         st.warning("Grid update failed. Please refresh.")
 
     # Preview
-    labour_df = calculate_labour_costs(st.session_state[GRID_KEY], currency, type_of_schedule)
+    labour_df = calculate_labour_costs(st.session_state[GRID_KEY], currency, type_of_schedule, type_of_package)
     total = labour_df[f"Labour Cost ({currency})"].sum() if not labour_df.empty else 0
     
     if not labour_df.empty:
@@ -1249,7 +1331,9 @@ def render_third_party():
     st.header("💰 Third Party & Non-Labour Costs")
     currency = currency_for(st.session_state["type_of_schedule"])
     
-    labour_df = calculate_labour_costs(st.session_state[GRID_KEY], currency, st.session_state["type_of_schedule"])
+    labour_df = calculate_labour_costs(st.session_state[GRID_KEY], currency, 
+                                       st.session_state["type_of_schedule"],
+                                       st.session_state["type_of_package"])
     total_labour = labour_df[f"Labour Cost ({currency})"].sum() if not labour_df.empty else 0
     
     st.info(f"Current Total Labour Cost: {currency} {total_labour:,.2f}")
@@ -1319,7 +1403,9 @@ def render_loading():
     st.header("📅 Monthly Loading")
     currency = currency_for(st.session_state["type_of_schedule"])
     
-    labour_df = calculate_labour_costs(st.session_state[GRID_KEY], currency, st.session_state["type_of_schedule"])
+    labour_df = calculate_labour_costs(st.session_state[GRID_KEY], currency, 
+                                       st.session_state["type_of_schedule"],
+                                       st.session_state["type_of_package"])
     total_labour = labour_df[f"Labour Cost ({currency})"].sum() if not labour_df.empty else 0
     
     third_party_df = calculate_third_party_costs(st.session_state[THIRD_PARTY_KEY], total_labour, currency)
@@ -1404,14 +1490,15 @@ def render_loading():
 
 def render_totals():
     schedule = st.session_state["type_of_schedule"]
+    package = st.session_state["type_of_package"]
     currency = currency_for(schedule)
-    kpbi = st.session_state["kpbi_rate"]
 
-    labour_df = calculate_labour_costs(st.session_state[GRID_KEY], currency, schedule)
+    labour_df = calculate_labour_costs(st.session_state[GRID_KEY], currency, schedule, package)
+    kpbi_labour_df = calculate_kpbi_labour_costs(st.session_state[GRID_KEY], currency, schedule, package)
     total_labour = float(labour_df[f"Labour Cost ({currency})"].sum()) if not labour_df.empty else 0.0
     
     third_df = calculate_third_party_costs(st.session_state[THIRD_PARTY_KEY], total_labour, currency)
-    totals = compute_totals(labour_df, third_df, st.session_state[MONTHLY_LOADING_KEY], currency, kpbi)
+    totals = compute_totals(labour_df, kpbi_labour_df, third_df, st.session_state[MONTHLY_LOADING_KEY], currency)
 
     st.markdown(
         f"""
@@ -1420,8 +1507,8 @@ def render_totals():
             <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 1.5rem;">
                 <div><h3 style="color: var(--text-muted);">Total Manhours</h3>
                 <div style="font-size: 2.2rem;">{totals['total_hours']:,.0f}</div></div>
-                <div><h3 style="color: var(--text-muted);">KPBI Rate</h3>
-                <div style="font-size: 2.2rem;">{kpbi:,.2f} {currency}/hr</div></div>
+                <div><h3 style="color: var(--text-muted);">Package</h3>
+                <div style="font-size: 2.2rem;">{package}</div></div>
             </div>
         </div>
         """, unsafe_allow_html=True
@@ -1432,7 +1519,7 @@ def render_totals():
         st.markdown(
             f"""
             <div class="metric-card">
-                <h3>🔵 METHOD A — EXACT</h3>
+                <h3>🔵 METHOD A — EXACT RATES</h3>
                 <div class="value">{totals['total_exact']:,.2f} {currency}</div>
                 <div class="subvalue">Labour: {totals['total_labour_exact']:,.2f}<br/>Third Party: {totals['total_third_party']:,.2f}</div>
             </div>
@@ -1442,7 +1529,7 @@ def render_totals():
         st.markdown(
             f"""
             <div class="metric-card">
-                <h3>🟢 METHOD B — KPBI</h3>
+                <h3>🟢 METHOD B — KPBI RATES (from CSV)</h3>
                 <div class="value">{totals['total_kpbi']:,.2f} {currency}</div>
                 <div class="subvalue">Labour (KPBI): {totals['total_labour_kpbi']:,.2f}<br/>Third Party: {totals['total_third_party']:,.2f}</div>
             </div>
@@ -1450,7 +1537,7 @@ def render_totals():
         )
 
     if not totals["discipline_totals"].empty:
-        st.subheader("Labour Cost by Discipline")
+        st.subheader("Labour Cost by Discipline (Method A)")
         st.dataframe(totals["discipline_totals"], use_container_width=True, hide_index=True)
         
         fig = px.bar(totals["discipline_totals"].sort_values(f"Labour Cost ({currency})"), 
@@ -1487,8 +1574,8 @@ def render_totals():
 
 def render_summary():
     schedule = st.session_state["type_of_schedule"]
+    package = st.session_state["type_of_package"]
     currency = currency_for(schedule)
-    kpbi = st.session_state["kpbi_rate"]
 
     meta = pd.DataFrame([{
         "Project Title": st.session_state["project_title"],
@@ -1496,16 +1583,17 @@ def render_summary():
         "Cost Engineer": st.session_state["cost_engineer"],
         "TP/Specialist": st.session_state["tp_specialist"],
         "Schedule": schedule,
+        "Package": package,
         "Currency": currency,
-        "KPBI Rate": kpbi,
         "Hours/Month": HOURS_PER_MONTH,
     }])
 
-    labour_df = calculate_labour_costs(st.session_state[GRID_KEY], currency, schedule)
+    labour_df = calculate_labour_costs(st.session_state[GRID_KEY], currency, schedule, package)
+    kpbi_labour_df = calculate_kpbi_labour_costs(st.session_state[GRID_KEY], currency, schedule, package)
     total_labour = float(labour_df[f"Labour Cost ({currency})"].sum()) if not labour_df.empty else 0.0
     
     third_df = calculate_third_party_costs(st.session_state[THIRD_PARTY_KEY], total_labour, currency)
-    totals = compute_totals(labour_df, third_df, st.session_state[MONTHLY_LOADING_KEY], currency, kpbi)
+    totals = compute_totals(labour_df, kpbi_labour_df, third_df, st.session_state[MONTHLY_LOADING_KEY], currency)
 
     st.subheader("Project Information")
     st.dataframe(meta, use_container_width=True)
@@ -1514,8 +1602,8 @@ def render_summary():
     col1, col2 = st.columns(2)
     with col1:
         fig = go.Figure(data=[
-            go.Bar(name='Method A', x=['Total'], y=[totals['total_exact']], marker_color=BRAND1),
-            go.Bar(name='Method B', x=['Total'], y=[totals['total_kpbi']], marker_color=BRAND2)
+            go.Bar(name='Method A (Exact)', x=['Total'], y=[totals['total_exact']], marker_color=BRAND1),
+            go.Bar(name='Method B (KPBI)', x=['Total'], y=[totals['total_kpbi']], marker_color=BRAND2)
         ])
         fig.update_layout(title="Method Comparison", yaxis_title=f"Cost ({currency})", barmode='group')
         st.plotly_chart(fig, use_container_width=True)
@@ -1537,7 +1625,8 @@ def render_summary():
 
     if st.button("📥 Download Excel Report", type="primary", use_container_width=True):
         with st.spinner("Generating..."):
-            excel = to_excel_bytes(meta, totals, labour_df, third_df, st.session_state[MONTHLY_LOADING_KEY], schedule, currency)
+            excel = to_excel_bytes(meta, totals, labour_df, kpbi_labour_df, third_df, 
+                                  st.session_state[MONTHLY_LOADING_KEY], schedule, currency)
             st.download_button("⬇️ Download", data=excel, file_name=f"MEC_{st.session_state['project_title'] or 'Output'}.xlsx",
                              mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
@@ -1568,7 +1657,7 @@ def render_compare():
             do_rerun()
         return
 
-    display = [f"{p['name']} ({p['type_of_schedule']}, {p['currency']})" for p in saved]
+    display = [f"{p['name']} ({p['type_of_schedule']}, {p['type_of_package']}, {p['currency']})" for p in saved]
     
     col1, col2 = st.columns(2)
     with col1:
@@ -1623,7 +1712,7 @@ def render_compare():
         cols = st.columns([3, 2, 2, 1])
         with cols[0]:
             st.write(f"**{p['name']}**")
-            st.caption(f"{p['type_of_schedule']} • {p['currency']}")
+            st.caption(f"{p['type_of_schedule']} • {p['type_of_package']} • {p['currency']}")
         with cols[1]:
             st.caption(f"Method A: {p['total_exact']:,.2f}")
         with cols[2]:
