@@ -1,5 +1,5 @@
 # streamlit_app.py
-# MEC TOOL – Streamlit app (CSV version with updated rate types)
+# MEC TOOL – Streamlit app (Uploadable CSV version with updated rate types)
 # Author: Ahmad Naquib Syahmee Masror (Dev/Upstream)
 # Date: 2025-10-29
 
@@ -454,9 +454,6 @@ def _rate_col_for_unit_type(df: pd.DataFrame, unit_type: str, prefer_usd: bool) 
     pairs = [(_canon(c), c) for c in df.columns]
     
     # Map new rate types to their old equivalents for backward compatibility with CSV data
-    rate_mapping_canon = {_canon(k): _canon(v) for k, v in RATE_MAPPING.items()}
-    
-    # Check if the key matches any of the new rate types
     if key.startswith("rate a") or key in [_canon("Rate A"), "rate a"]:
         token = "mmc"  # Map to old MMC
     elif key.startswith("rate b") or key in [_canon("Rate B"), "rate b"]:
@@ -517,16 +514,18 @@ def _base_working_rate_col(working: pd.DataFrame) -> Optional[str]:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Load CSV files
+# Load CSV files from upload
 # ──────────────────────────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False, ttl=600)  # cache for 10 minutes
-def load_csv_files(data_path: str, u1_path: str, u2_path: str):
-    """Load three CSV files: DATA.csv, U1.csv, U2.csv"""
+def load_csv_files_from_upload(data_file, u1_file, u2_file):
+    """Load three CSV files from uploaded file objects"""
     
-    def read_csv_safe(path):
+    def read_csv_safe(file_obj):
         try:
-            if os.path.exists(path):
-                df = pd.read_csv(path)
+            if file_obj is not None:
+                # Read the uploaded file
+                df = pd.read_csv(file_obj)
+                
                 # Try to detect if there's a header row that needs cleaning
                 if len(df) > 0:
                     # Check if first row might be a header
@@ -545,12 +544,20 @@ def load_csv_files(data_path: str, u1_path: str, u2_path: str):
             else:
                 return pd.DataFrame()
         except Exception as e:
-            st.warning(f"Error reading {path}: {e}")
+            st.warning(f"Error reading CSV file: {e}")
             return pd.DataFrame()
     
-    data_tbl = read_csv_safe(data_path)
-    u1_tbl = read_csv_safe(u1_path)
-    u2_tbl = read_csv_safe(u2_path)
+    # Reset file pointers to beginning
+    if data_file:
+        data_file.seek(0)
+    if u1_file:
+        u1_file.seek(0)
+    if u2_file:
+        u2_file.seek(0)
+    
+    data_tbl = read_csv_safe(data_file)
+    u1_tbl = read_csv_safe(u1_file)
+    u2_tbl = read_csv_safe(u2_file)
     
     # Create a working dataframe from Data table (or first available)
     working = data_tbl.copy() if not data_tbl.empty else (u1_tbl.copy() if not u1_tbl.empty else u2_tbl.copy())
@@ -593,99 +600,98 @@ def load_csv_files(data_path: str, u1_path: str, u2_path: str):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# HARD NO-UPLOAD MODE — load from local folder
+# File Upload Section in Sidebar
 # ──────────────────────────────────────────────────────────────────────────────
-DEFAULT_HOST_DIR = r"C:\mec_inputs" if os.name == "nt" else os.path.join(os.getcwd(), "input")
-SAFE_BASE_DIR = os.environ.get("MEC_ALLOWED_DIR", DEFAULT_HOST_DIR)
-os.makedirs(SAFE_BASE_DIR, exist_ok=True)
-
-
-def _list_csv_files(base):
-    """List all CSV files in directory"""
-    try:
-        return sorted(
-            [f for f in os.listdir(base) if f.lower().endswith(".csv")],
-            key=lambda n: os.path.getmtime(os.path.join(base, n)),
-            reverse=True,
-        )
-    except Exception:
-        return []
-
-
-def _resolve_csv_paths():
-    """Find DATA.csv, U1.csv, U2.csv in the directory"""
-    files = _list_csv_files(SAFE_BASE_DIR)
-    
-    data_path = None
-    u1_path = None
-    u2_path = None
-    
-    for f in files:
-        f_lower = f.lower()
-        if f_lower == "data.csv":
-            data_path = os.path.join(SAFE_BASE_DIR, f)
-        elif f_lower == "u1.csv":
-            u1_path = os.path.join(SAFE_BASE_DIR, f)
-        elif f_lower == "u2.csv":
-            u2_path = os.path.join(SAFE_BASE_DIR, f)
-    
-    if not data_path:
-        raise FileNotFoundError(f"DATA.csv not found in {SAFE_BASE_DIR}")
-    
-    return data_path, u1_path, u2_path
-
-
 with st.sidebar:
-    st.subheader("CSV Files (local, no-upload)")
-    st.caption(f"Folder: {SAFE_BASE_DIR}")
-    st.caption("Required: DATA.csv, U1.csv, U2.csv")
-    if st.button("Reload files", use_container_width=True):
-        st.session_state.pop("csv_data", None)
-        st.session_state.pop("csv_u1", None)
-        st.session_state.pop("csv_u2", None)
-        do_rerun()
-    st.markdown(
-        """
-Drop your CSV files in the folder above, then click Reload.
-""",
-        unsafe_allow_html=True,
+    st.subheader("📁 Upload CSV Files")
+    st.caption("Upload the required CSV files")
+    
+    # File uploaders for the three CSV files
+    data_file = st.file_uploader(
+        "DATA.csv",
+        type=["csv"],
+        key="data_uploader",
+        help="Upload the DATA.csv file containing rate information"
     )
-
-# Load CSV files
-csv_data = st.session_state.get("csv_data")
-csv_u1 = st.session_state.get("csv_u1")
-csv_u2 = st.session_state.get("csv_u2")
-
-if csv_data is None or csv_u1 is None or csv_u2 is None:
-    try:
-        data_path, u1_path, u2_path = _resolve_csv_paths()
+    
+    u1_file = st.file_uploader(
+        "U1.csv",
+        type=["csv"],
+        key="u1_uploader",
+        help="Upload the U1.csv file (Package U1 rates)"
+    )
+    
+    u2_file = st.file_uploader(
+        "U2.csv",
+        type=["csv"],
+        key="u2_uploader",
+        help="Upload the U2.csv file (Package U2 rates)"
+    )
+    
+    # Check if all required files are uploaded
+    all_files_uploaded = data_file is not None and u1_file is not None and u2_file is not None
+    
+    if all_files_uploaded:
+        st.success("✅ All CSV files uploaded!")
         
-        # Store paths in session for loading
-        st.session_state["csv_data_path"] = data_path
-        st.session_state["csv_u1_path"] = u1_path
-        st.session_state["csv_u2_path"] = u2_path
+        # Add a button to load/reload the data
+        if st.button("Load CSV Data", type="primary", use_container_width=True):
+            st.session_state.pop("csv_data_loaded", None)
+            st.cache_data.clear()
+            do_rerun()
+    else:
+        missing = []
+        if data_file is None:
+            missing.append("DATA.csv")
+        if u1_file is None:
+            missing.append("U1.csv")
+        if u2_file is None:
+            missing.append("U2.csv")
         
-        st.success(f"Found: {os.path.basename(data_path)}, {os.path.basename(u1_path) if u1_path else 'U1.csv missing'}, {os.path.basename(u2_path) if u2_path else 'U2.csv missing'}")
-    except Exception as e:
-        st.error(str(e))
+        st.warning(f"Missing: {', '.join(missing)}")
+        st.info("Please upload all three CSV files to continue.")
         st.stop()
 
-# Parse CSV files
-(
-    working,
-    data_tbl,
-    u1_tbl,
-    u2_tbl,
-    base_rate_col,
-    schedule_opts,
-    package_opts,
-    DISC_LIST,
-    PERSONNEL_LIST,
-) = load_csv_files(
-    st.session_state.get("csv_data_path", ""),
-    st.session_state.get("csv_u1_path", ""),
-    st.session_state.get("csv_u2_path", "")
-)
+# Load CSV data from uploaded files
+if all_files_uploaded and "csv_data_loaded" not in st.session_state:
+    with st.spinner("Loading CSV data..."):
+        (
+            working,
+            data_tbl,
+            u1_tbl,
+            u2_tbl,
+            base_rate_col,
+            schedule_opts,
+            package_opts,
+            DISC_LIST,
+            PERSONNEL_LIST,
+        ) = load_csv_files_from_upload(data_file, u1_file, u2_file)
+        
+        # Store in session state
+        st.session_state["working"] = working
+        st.session_state["data_tbl"] = data_tbl
+        st.session_state["u1_tbl"] = u1_tbl
+        st.session_state["u2_tbl"] = u2_tbl
+        st.session_state["base_rate_col"] = base_rate_col
+        st.session_state["schedule_opts"] = schedule_opts
+        st.session_state["package_opts"] = package_opts
+        st.session_state["DISC_LIST"] = DISC_LIST
+        st.session_state["PERSONNEL_LIST"] = PERSONNEL_LIST
+        st.session_state["csv_data_loaded"] = True
+        
+        st.success("CSV data loaded successfully!")
+        do_rerun()
+
+# Retrieve from session state
+working = st.session_state.get("working", pd.DataFrame())
+data_tbl = st.session_state.get("data_tbl", pd.DataFrame())
+u1_tbl = st.session_state.get("u1_tbl", pd.DataFrame())
+u2_tbl = st.session_state.get("u2_tbl", pd.DataFrame())
+base_rate_col = st.session_state.get("base_rate_col")
+schedule_opts = st.session_state.get("schedule_opts", [])
+package_opts = st.session_state.get("package_opts", ["U1", "U2"])
+DISC_LIST = st.session_state.get("DISC_LIST", list(DISCIPLINE_ROW_COUNTS.keys()))
+PERSONNEL_LIST = st.session_state.get("PERSONNEL_LIST", [])
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Session defaults
@@ -1351,7 +1357,7 @@ def render_main():
         unsafe_allow_html=True,
     )
     
-    st.caption(f"📄 CSV Files: DATA.csv, U1.csv, U2.csv")
+    st.caption(f"📁 Uploaded CSV Files: DATA.csv, U1.csv, U2.csv")
 
     st.markdown("<hr style='margin: 2rem 0;'/>", unsafe_allow_html=True)
     st.header("Main Page")
