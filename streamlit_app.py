@@ -1,5 +1,5 @@
 # streamlit_app.py
-# MEC TOOL – Streamlit app (UI polished, performance improved)
+# MEC TOOL – Streamlit app (CSV version with updated rate types)
 # Author: Ahmad Naquib Syahmee Masror (Dev/Upstream)
 # Date: 2025-10-29
 
@@ -13,8 +13,8 @@ from datetime import datetime
 import pandas as pd
 import streamlit as st
 
-# Silence harmless openpyxl validation warning
-warnings.filterwarnings("ignore", category=UserWarning, module="openpyxl")
+# Silence harmless warnings
+warnings.filterwarnings("ignore", category=UserWarning)
 
 # AG Grid (with JsCode for custom JS)
 try:
@@ -202,7 +202,20 @@ B_D_CATEGORY_FALLBACK = [
     "Others",
 ]
 AC_CATEGORIES = ["Malaysian", "Regional", "Expatriate"]
-UNIT_TYPES = ["Minimum", "Maximum", "Normalise", "MMC", "DAR", "AKER", "TUAH", "PRW", "PUSB"]
+
+# UPDATED: Rate types as requested
+UNIT_TYPES = ["Minimum", "Maximum", "Normalise", "Rate A", "Rate B", "Rate C", "Rate D", "Rate E", "Rate F"]
+
+# Mapping from old to new (for reference)
+RATE_MAPPING = {
+    "MMC": "Rate A",
+    "DAR": "Rate B",
+    "AKER": "Rate C",
+    "TUAH": "Rate D",
+    "PRW": "Rate E",
+    "PUSB": "Rate F"
+}
+
 RATE_SOURCES = ["Data", "U1", "U2"]
 
 # Third Party & Non-Labour cost categories
@@ -392,35 +405,6 @@ def _normalize_cols(df: pd.DataFrame) -> pd.DataFrame:
     return df.rename(columns=colmap)
 
 
-def _find_header_row(raw: pd.DataFrame, max_scan: int = 80) -> Optional[int]:
-    for r in range(min(max_scan, len(raw))):
-        row = [_canon(v) for v in list(raw.iloc[r, :].values)]
-        hits = 0
-        for key in ["discipline", "personnel", "category", "schedule", "type of unit", "unit rate", "unit rate (myr)"]:
-            if any(key in v for v in row):
-                hits += 1
-        if hits >= 3:
-            return r
-    return None
-
-
-def _read_sheet_smart(xl: pd.ExcelFile, sheet_names: List[str]) -> pd.DataFrame:
-    for name in sheet_names:
-        try:
-            raw = xl.parse(name, header=None)
-        except Exception:
-            continue
-        hdr = _find_header_row(raw)
-        if hdr is None:
-            continue
-        df = raw.iloc[hdr + 1 :].copy()
-        df.columns = [raw.iloc[hdr, i] if i < raw.shape[1] else f"col_{i}" for i in range(df.shape[1])]
-        df = df.loc[:, ~pd.Index(df.columns.astype(str)).str.contains("^Unnamed", case=False, na=False)]
-        df = _normalize_cols(df).dropna(how="all")
-        return df
-    return pd.DataFrame()
-
-
 def get_col(df: pd.DataFrame, name: str) -> pd.Series:
     s = df[name]
     if isinstance(s, pd.DataFrame):
@@ -468,7 +452,24 @@ def build_category_options(schedule: str, rate_source: str, data_tbl, u1_tbl, u2
 def _rate_col_for_unit_type(df: pd.DataFrame, unit_type: str, prefer_usd: bool) -> Optional[str]:
     key = _canon(unit_type)
     pairs = [(_canon(c), c) for c in df.columns]
-    if key.startswith("min"):
+    
+    # Map new rate types to their old equivalents for backward compatibility with CSV data
+    rate_mapping_canon = {_canon(k): _canon(v) for k, v in RATE_MAPPING.items()}
+    
+    # Check if the key matches any of the new rate types
+    if key.startswith("rate a") or key in [_canon("Rate A"), "rate a"]:
+        token = "mmc"  # Map to old MMC
+    elif key.startswith("rate b") or key in [_canon("Rate B"), "rate b"]:
+        token = "dar"  # Map to old DAR
+    elif key.startswith("rate c") or key in [_canon("Rate C"), "rate c"]:
+        token = "aker"  # Map to old AKER
+    elif key.startswith("rate d") or key in [_canon("Rate D"), "rate d"]:
+        token = "tuah"  # Map to old TUAH
+    elif key.startswith("rate e") or key in [_canon("Rate E"), "rate e"]:
+        token = "prw"  # Map to old PRW
+    elif key.startswith("rate f") or key in [_canon("Rate F"), "rate f"]:
+        token = "pusb"  # Map to old PUSB
+    elif key.startswith("min"):
         token = "minimum"
     elif key.startswith("max"):
         token = "maximum"
@@ -492,7 +493,7 @@ def _rate_col_for_unit_type(df: pd.DataFrame, unit_type: str, prefer_usd: bool) 
             score += 2
         if (not prefer_usd) and has_myr:
             score += 2
-        if token in ("minimum", "maximum", "normalise") and ("unit rate" in k or "rate" in k):
+        if token in ("minimum", "maximum", "normalise", "mmc", "dar", "aker", "tuah", "prw", "pusb") and ("unit rate" in k or "rate" in k):
             score += 1
         if score > 0:
             ranked.append((score, c))
@@ -516,18 +517,44 @@ def _base_working_rate_col(working: pd.DataFrame) -> Optional[str]:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Load workbook (bytes)
+# Load CSV files
 # ──────────────────────────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False, ttl=600)  # cache for 10 minutes
-def load_workbook(file_bytes: bytes, file_label: str):
-    bio = io.BytesIO(file_bytes)
-    xl = pd.ExcelFile(bio, engine="openpyxl")
-
-    working = _read_sheet_smart(xl, ["Working Page", "TblWorkingView"])
-    data_tbl = _read_sheet_smart(xl, ["Data"])
-    u1_tbl = _read_sheet_smart(xl, ["U1"])
-    u2_tbl = _read_sheet_smart(xl, ["U2"])
-
+def load_csv_files(data_path: str, u1_path: str, u2_path: str):
+    """Load three CSV files: DATA.csv, U1.csv, U2.csv"""
+    
+    def read_csv_safe(path):
+        try:
+            if os.path.exists(path):
+                df = pd.read_csv(path)
+                # Try to detect if there's a header row that needs cleaning
+                if len(df) > 0:
+                    # Check if first row might be a header
+                    first_row = df.iloc[0].astype(str).str.lower()
+                    if any(key in ' '.join(first_row) for key in ['discipline', 'personnel', 'category', 'schedule']):
+                        # Use first row as header and skip it in data
+                        new_header = df.iloc[0]
+                        df = df[1:]
+                        df.columns = new_header
+                
+                # Clean up column names
+                df = _normalize_cols(df)
+                # Remove any rows that are all NaN
+                df = df.dropna(how='all')
+                return df
+            else:
+                return pd.DataFrame()
+        except Exception as e:
+            st.warning(f"Error reading {path}: {e}")
+            return pd.DataFrame()
+    
+    data_tbl = read_csv_safe(data_path)
+    u1_tbl = read_csv_safe(u1_path)
+    u2_tbl = read_csv_safe(u2_path)
+    
+    # Create a working dataframe from Data table (or first available)
+    working = data_tbl.copy() if not data_tbl.empty else (u1_tbl.copy() if not u1_tbl.empty else u2_tbl.copy())
+    
     base_rate_col = _base_working_rate_col(working)
 
     schedule_opts = []
@@ -535,7 +562,13 @@ def load_workbook(file_bytes: bytes, file_label: str):
         s = get_col(data_tbl, "schedule").dropna().astype(str).str.strip()
         schedule_opts = sorted([v for v in s.unique().tolist() if v])
 
-    package_opts = [s for s, df in (("U1", u1_tbl), ("U2", u2_tbl)) if not df.empty] or ["U1", "U2"]
+    package_opts = []
+    if not u1_tbl.empty:
+        package_opts.append("U1")
+    if not u2_tbl.empty:
+        package_opts.append("U2")
+    if not package_opts:
+        package_opts = ["U1", "U2"]
 
     disciplines = list(DISCIPLINE_ROW_COUNTS.keys())
 
@@ -564,14 +597,14 @@ def load_workbook(file_bytes: bytes, file_label: str):
 # ──────────────────────────────────────────────────────────────────────────────
 DEFAULT_HOST_DIR = r"C:\mec_inputs" if os.name == "nt" else os.path.join(os.getcwd(), "input")
 SAFE_BASE_DIR = os.environ.get("MEC_ALLOWED_DIR", DEFAULT_HOST_DIR)
-DEFAULT_FILE_ENV = os.environ.get("MEC_DEFAULT_FILE", "MEC TOOL.xlsx").strip()
 os.makedirs(SAFE_BASE_DIR, exist_ok=True)
 
 
-def _list_xlsx(base):
+def _list_csv_files(base):
+    """List all CSV files in directory"""
     try:
         return sorted(
-            [f for f in os.listdir(base) if f.lower().endswith(".xlsx")],
+            [f for f in os.listdir(base) if f.lower().endswith(".csv")],
             key=lambda n: os.path.getmtime(os.path.join(base, n)),
             reverse=True,
         )
@@ -579,51 +612,65 @@ def _list_xlsx(base):
         return []
 
 
-def _resolve_file():
-    if DEFAULT_FILE_ENV and os.path.isabs(DEFAULT_FILE_ENV) and os.path.exists(DEFAULT_FILE_ENV):
-        return DEFAULT_FILE_ENV
-    if DEFAULT_FILE_ENV:
-        candidate = os.path.join(SAFE_BASE_DIR, DEFAULT_FILE_ENV)
-        if os.path.exists(candidate):
-            return candidate
-    file_list = _list_xlsx(SAFE_BASE_DIR)
-    if file_list:
-        return os.path.join(SAFE_BASE_DIR, file_list[0])
-    raise FileNotFoundError(
-        f"No .xlsx found. Put a workbook named '{DEFAULT_FILE_ENV}' into:\n {SAFE_BASE_DIR}"
-    )
+def _resolve_csv_paths():
+    """Find DATA.csv, U1.csv, U2.csv in the directory"""
+    files = _list_csv_files(SAFE_BASE_DIR)
+    
+    data_path = None
+    u1_path = None
+    u2_path = None
+    
+    for f in files:
+        f_lower = f.lower()
+        if f_lower == "data.csv":
+            data_path = os.path.join(SAFE_BASE_DIR, f)
+        elif f_lower == "u1.csv":
+            u1_path = os.path.join(SAFE_BASE_DIR, f)
+        elif f_lower == "u2.csv":
+            u2_path = os.path.join(SAFE_BASE_DIR, f)
+    
+    if not data_path:
+        raise FileNotFoundError(f"DATA.csv not found in {SAFE_BASE_DIR}")
+    
+    return data_path, u1_path, u2_path
 
 
 with st.sidebar:
-    st.subheader("Workbook (local, no-upload)")
+    st.subheader("CSV Files (local, no-upload)")
     st.caption(f"Folder: {SAFE_BASE_DIR}")
-    if st.button("Reload file", use_container_width=True):
-        st.session_state.pop("file_bytes", None)
-        st.session_state.pop("file_label", None)
+    st.caption("Required: DATA.csv, U1.csv, U2.csv")
+    if st.button("Reload files", use_container_width=True):
+        st.session_state.pop("csv_data", None)
+        st.session_state.pop("csv_u1", None)
+        st.session_state.pop("csv_u2", None)
         do_rerun()
     st.markdown(
         """
-Drop your MEC workbook in the folder above, then click Reload.
+Drop your CSV files in the folder above, then click Reload.
 """,
         unsafe_allow_html=True,
     )
 
-file_bytes = st.session_state.get("file_bytes")
-file_label = st.session_state.get("file_label")
-if not file_bytes:
+# Load CSV files
+csv_data = st.session_state.get("csv_data")
+csv_u1 = st.session_state.get("csv_u1")
+csv_u2 = st.session_state.get("csv_u2")
+
+if csv_data is None or csv_u1 is None or csv_u2 is None:
     try:
-        path = _resolve_file()
-        with open(path, "rb") as f:
-            file_bytes = f.read()
-        file_label = os.path.basename(path)
-        st.session_state["file_bytes"] = file_bytes
-        st.session_state["file_label"] = file_label
-        st.success(f"Loaded: {file_label}")
+        data_path, u1_path, u2_path = _resolve_csv_paths()
+        
+        # Store paths in session for loading
+        st.session_state["csv_data_path"] = data_path
+        st.session_state["csv_u1_path"] = u1_path
+        st.session_state["csv_u2_path"] = u2_path
+        
+        st.success(f"Found: {os.path.basename(data_path)}, {os.path.basename(u1_path) if u1_path else 'U1.csv missing'}, {os.path.basename(u2_path) if u2_path else 'U2.csv missing'}")
     except Exception as e:
         st.error(str(e))
         st.stop()
 
-# Parse workbook from bytes
+# Parse CSV files
 (
     working,
     data_tbl,
@@ -634,7 +681,11 @@ if not file_bytes:
     package_opts,
     DISC_LIST,
     PERSONNEL_LIST,
-) = load_workbook(file_bytes, file_label)
+) = load_csv_files(
+    st.session_state.get("csv_data_path", ""),
+    st.session_state.get("csv_u1_path", ""),
+    st.session_state.get("csv_u2_path", "")
+)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Session defaults
@@ -1300,7 +1351,7 @@ def render_main():
         unsafe_allow_html=True,
     )
     
-    st.caption(f"📄 Workbook: {st.session_state.get('file_label','(loaded)')}")
+    st.caption(f"📄 CSV Files: DATA.csv, U1.csv, U2.csv")
 
     st.markdown("<hr style='margin: 2rem 0;'/>", unsafe_allow_html=True)
     st.header("Main Page")
@@ -1344,7 +1395,7 @@ def render_main():
             help="Select the package type (U1/U2)"
         )
         st.session_state["type_of_schedule"] = st.selectbox(
-            "Type of Schedule (from Data sheet)",
+            "Type of Schedule (from DATA.csv)",
             schedule_opts if schedule_opts else ["Schedule A", "Schedule B", "Schedule C", "Schedule D"],
             index=0
             if not schedule_opts
@@ -1444,6 +1495,7 @@ def render_table():
             st.session_state[GRID_KEY] = df
             do_rerun()
     with c_type:
+        # UPDATED: Using new UNIT_TYPES with Rate A, Rate B, etc.
         new_type = st.selectbox("Type of Unit Rate for ALL", UNIT_TYPES, key="bulk_type")
         if st.button("Apply type", use_container_width=True):
             df = st.session_state[GRID_KEY].copy()
@@ -1527,6 +1579,7 @@ def render_table():
         cellEditor="agSelectCellEditor",
         cellEditorParams={"values": category_options_global},
     )
+    # UPDATED: Using new UNIT_TYPES
     gb.configure_column(
         "Type of Unit Rate",
         width=220,
