@@ -1,5 +1,5 @@
 # streamlit_app.py
-# MEC TOOL – Streamlit app (Fixed reset functionality)
+# MEC TOOL – Streamlit app (Fixed reset functionality - keeps saved projects)
 # Author: Ahmad Naquib Syahmee Masror (Dev/Upstream)
 # Date: 2025-10-29
 
@@ -538,10 +538,10 @@ def reset_grid():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# FIXED RESET FUNCTION - Simple version that doesn't delete anything
+# FIXED RESET FUNCTION - Keeps saved projects
 # ──────────────────────────────────────────────────────────────────────────────
 def reset_all():
-    """Simple reset that only clears project data without touching app state"""
+    """Reset project data but keep saved projects for comparison"""
     # Don't delete anything - just reset the values
     
     # Reset project info
@@ -602,13 +602,13 @@ def reset_all():
     }
     st.session_state[MONTHLY_LOADING_KEY] = pd.DataFrame(monthly_data)
     
-    # Clear saved projects but keep everything else
-    st.session_state[SAVED_PROJECTS_KEY] = []
+    # DO NOT clear saved projects - keep them for comparison
+    # st.session_state[SAVED_PROJECTS_KEY] = []  # This line is removed
     
     # Stay on MAIN page
     st.session_state["page"] = "MAIN"
     
-    st.success("Project reset successfully!")
+    st.success("Project reset successfully! Saved projects are preserved.")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1167,7 +1167,7 @@ def render_main():
     with col3:
         if st.button("🔄 New Project", type="secondary", use_container_width=True):
             reset_all()
-            st.success("Started new project!")
+            st.success("Started new project! Saved projects preserved.")
             do_rerun()
 
     mp1, mp2 = st.columns(2)
