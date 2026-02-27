@@ -1,5 +1,5 @@
 # streamlit_app.py
-# MEC TOOL – Streamlit app (Single CSV version with KPBI rate from CSV)
+# MEC TOOL – Streamlit app (Fixed reset functionality)
 # Author: Ahmad Naquib Syahmee Masror (Dev/Upstream)
 # Date: 2025-10-29
 
@@ -206,6 +206,12 @@ def init_session_state():
     if "page" not in st.session_state:
         st.session_state["page"] = "MAIN"
     
+    # Theme state
+    if "theme_choice" not in st.session_state:
+        st.session_state["theme_choice"] = "Emerald"
+    if "dark_mode" not in st.session_state:
+        st.session_state["dark_mode"] = False
+    
     # Project info
     if "project_title" not in st.session_state:
         st.session_state["project_title"] = ""
@@ -259,10 +265,15 @@ DEFAULT_THEME = "Emerald"
 
 with st.sidebar:
     st.subheader("Appearance")
-    theme_choice = st.radio("Theme", list(THEMES.keys()), index=list(THEMES.keys()).index(DEFAULT_THEME))
-    dark_mode = st.toggle("🌙 Dark mode", value=False, help="Switch to dark UI")
+    theme_choice = st.radio("Theme", list(THEMES.keys()), 
+                           index=list(THEMES.keys()).index(st.session_state["theme_choice"]))
+    dark_mode = st.toggle("🌙 Dark mode", value=st.session_state["dark_mode"], help="Switch to dark UI")
+    
+    # Update session state with theme choices
+    st.session_state["theme_choice"] = theme_choice
+    st.session_state["dark_mode"] = dark_mode
 
-PALETTE = THEMES[theme_choice]
+PALETTE = THEMES[st.session_state["theme_choice"]]
 BRAND1, BRAND2, MUTED = PALETTE["brand1"], PALETTE["brand2"], PALETTE["muted"]
 
 
@@ -373,7 +384,7 @@ def do_rerun():
         st.experimental_rerun()
 
 
-apply_theme(dark_mode, BRAND1, BRAND2, MUTED)
+apply_theme(st.session_state["dark_mode"], BRAND1, BRAND2, MUTED)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Helper Functions
@@ -526,28 +537,33 @@ def reset_grid():
     st.session_state[GRID_KEY] = pd.DataFrame(rows)
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# FIXED RESET FUNCTION - This prevents blank screen
+# ──────────────────────────────────────────────────────────────────────────────
 def reset_all():
-    """Reset all session state to default values but keep file data"""
-    # Keep file-related data
-    mec_df = st.session_state.get("mec_df", pd.DataFrame())
-    schedule_opts = st.session_state.get("schedule_opts", [])
-    personnel_list = st.session_state.get("personnel_list", [])
-    rate_types = st.session_state.get("rate_types", [])
-    data_loaded = st.session_state.get("mec_data_loaded", False)
+    """Reset all project data but keep the app running properly"""
+    # Keep essential app state
+    essential_keys = [
+        "mec_df", "schedule_opts", "personnel_list", "rate_types", "mec_data_loaded",
+        "theme_choice", "dark_mode", "page"
+    ]
     
-    # Clear all session state except file data
+    # Store essential data before clearing
+    essential_data = {}
+    for key in essential_keys:
+        if key in st.session_state:
+            essential_data[key] = st.session_state[key]
+    
+    # Clear everything except essential keys
     for key in list(st.session_state.keys()):
-        if key not in ["mec_df", "schedule_opts", "personnel_list", "rate_types", "mec_data_loaded"]:
+        if key not in essential_keys:
             del st.session_state[key]
     
-    # Restore file data
-    st.session_state["mec_df"] = mec_df
-    st.session_state["schedule_opts"] = schedule_opts
-    st.session_state["personnel_list"] = personnel_list
-    st.session_state["rate_types"] = rate_types
-    st.session_state["mec_data_loaded"] = data_loaded
+    # Restore essential data
+    for key, value in essential_data.items():
+        st.session_state[key] = value
     
-    # Reset page
+    # Reset to MAIN page
     st.session_state["page"] = "MAIN"
     
     # Reset project info
@@ -556,14 +572,21 @@ def reset_all():
     st.session_state["tp_specialist"] = ""
     st.session_state["project_date"] = None
     st.session_state["type_of_package"] = "U1"
-    if schedule_opts:
+    
+    # Set schedule from options if available
+    schedule_opts = st.session_state.get("schedule_opts", [])
+    if schedule_opts and len(schedule_opts) > 0:
         st.session_state["type_of_schedule"] = schedule_opts[0]
     else:
         st.session_state["type_of_schedule"] = "Schedule A"
+    
     st.session_state["rate_source"] = "MEC.csv"
     
-    # Reinitialize grids
+    # Reinitialize grids with fresh data
     initialize_default_grids()
+    
+    # Clear any saved projects
+    st.session_state[SAVED_PROJECTS_KEY] = []
 
 
 # ──────────────────────────────────────────────────────────────────────────────
