@@ -538,33 +538,11 @@ def reset_grid():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# FIXED RESET FUNCTION - This prevents blank screen
+# FIXED RESET FUNCTION - Simple version that doesn't delete anything
 # ──────────────────────────────────────────────────────────────────────────────
 def reset_all():
-    """Reset all project data but keep the app running properly"""
-    # Keep essential app state
-    essential_keys = [
-        "mec_df", "schedule_opts", "personnel_list", "rate_types", "mec_data_loaded",
-        "theme_choice", "dark_mode", "page"
-    ]
-    
-    # Store essential data before clearing
-    essential_data = {}
-    for key in essential_keys:
-        if key in st.session_state:
-            essential_data[key] = st.session_state[key]
-    
-    # Clear everything except essential keys
-    for key in list(st.session_state.keys()):
-        if key not in essential_keys:
-            del st.session_state[key]
-    
-    # Restore essential data
-    for key, value in essential_data.items():
-        st.session_state[key] = value
-    
-    # Reset to MAIN page
-    st.session_state["page"] = "MAIN"
+    """Simple reset that only clears project data without touching app state"""
+    # Don't delete anything - just reset the values
     
     # Reset project info
     st.session_state["project_title"] = ""
@@ -573,20 +551,64 @@ def reset_all():
     st.session_state["project_date"] = None
     st.session_state["type_of_package"] = "U1"
     
-    # Set schedule from options if available
-    schedule_opts = st.session_state.get("schedule_opts", [])
-    if schedule_opts and len(schedule_opts) > 0:
-        st.session_state["type_of_schedule"] = schedule_opts[0]
+    # Reset schedule to first option if available
+    if "schedule_opts" in st.session_state and st.session_state["schedule_opts"]:
+        st.session_state["type_of_schedule"] = st.session_state["schedule_opts"][0]
     else:
         st.session_state["type_of_schedule"] = "Schedule A"
     
-    st.session_state["rate_source"] = "MEC.csv"
+    # Reset grids to defaults
+    tmp_schedule = st.session_state["type_of_schedule"]
+    tmp_categories = build_category_options(tmp_schedule, st.session_state.get("mec_df", pd.DataFrame()))
+    if not tmp_categories:
+        tmp_categories = B_D_CATEGORY_FALLBACK if is_usd(tmp_schedule) else AC_CATEGORIES
     
-    # Reinitialize grids with fresh data
-    initialize_default_grids()
+    # Reset Personnel Table
+    rows = []
+    for disc, count in DISCIPLINE_ROW_COUNTS.items():
+        defaults = DEFAULT_PERSONNEL.get(disc, [])
+        for i in range(count):
+            personnel = defaults[i] if i < len(defaults) else (st.session_state.get("personnel_list", [""])[0] if st.session_state.get("personnel_list") else "")
+            rows.append({
+                "Swatch": DISCIPLINE_SWATCH.get(disc, "⬜"),
+                "Discipline": disc,
+                "Personnel": personnel,
+                "Category": tmp_categories[0] if tmp_categories else "",
+                "Type of Unit Rate": "Normalise",
+                "Weightage (FTE)": 0.0,
+                "Duration (months)": 1.0,
+            })
+    st.session_state[GRID_KEY] = pd.DataFrame(rows)
     
-    # Clear any saved projects
+    # Reset Third Party
+    third_party_rows = []
+    for category in THIRD_PARTY_CATEGORIES:
+        third_party_rows.append({
+            "Category": category,
+            "Description": "",
+            "Basis": "% of Labour Cost",
+            "Percentage": 0.0,
+            "Fixed Amount": 0.0,
+            "Remarks": ""
+        })
+    st.session_state[THIRD_PARTY_KEY] = pd.DataFrame(third_party_rows)
+    
+    # Reset Monthly Loading
+    months = [f"Month {i+1:02d}" for i in range(12)]
+    monthly_data = {
+        "Month": months,
+        "Loading Factor (%)": [100.0] * 12,
+        "Weightage Distribution": [100.0/12] * 12
+    }
+    st.session_state[MONTHLY_LOADING_KEY] = pd.DataFrame(monthly_data)
+    
+    # Clear saved projects but keep everything else
     st.session_state[SAVED_PROJECTS_KEY] = []
+    
+    # Stay on MAIN page
+    st.session_state["page"] = "MAIN"
+    
+    st.success("Project reset successfully!")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
