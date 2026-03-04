@@ -71,13 +71,11 @@ UNIT_TYPES = [
 # Third Party Categories
 THIRD_PARTY_CATEGORIES = [
     "Third Party Services",
-    "Equipment Rental",
-    "Software Licenses",
-    "Travel & Accommodation",
-    "Training",
-    "Material Costs",
-    "Subcontractor",
-    "Other Direct Costs"
+]
+
+# Non-Labour Categories
+NON_LABOUR_CATEGORIES = [
+    "Non-Labour Cost",
 ]
 
 # Discipline configurations
@@ -183,16 +181,18 @@ DISCIPLINE_SWATCH = {
 PAGES = {
     "MAIN": "🏠 Main Page",
     "TABLE": "👥 Personnel Table", 
-    "THIRD_PARTY": "💰 Third Party & Non-Labour",
+    "THIRD_PARTY": "💰 Third Party Services",
+    "NON_LABOUR": "🏭 Non-Labour Costs",
     "LOADING": "📅 Monthly Loading",
-    "TOTALS": "📊 Totals & Line Items",
-    "SUMMARY": "📈 Summary & Download",
+    "TOTALS": "📊 Summary",
+    "SUMMARY": "📈 Dashboard",
     "COMPARE": "🔄 Compare Projects"
 }
 
 # Session state keys
 GRID_KEY = "grid_df"
 THIRD_PARTY_KEY = "third_party_df"
+NON_LABOUR_KEY = "non_labour_df"
 MONTHLY_LOADING_KEY = "monthly_loading_df"
 SAVED_PROJECTS_KEY = "saved_projects"
 
@@ -233,6 +233,8 @@ def init_session_state():
         st.session_state[GRID_KEY] = pd.DataFrame()
     if THIRD_PARTY_KEY not in st.session_state:
         st.session_state[THIRD_PARTY_KEY] = pd.DataFrame()
+    if NON_LABOUR_KEY not in st.session_state:
+        st.session_state[NON_LABOUR_KEY] = pd.DataFrame()
     if MONTHLY_LOADING_KEY not in st.session_state:
         st.session_state[MONTHLY_LOADING_KEY] = pd.DataFrame()
     if SAVED_PROJECTS_KEY not in st.session_state:
@@ -371,6 +373,52 @@ def apply_theme(dark: bool, brand1: str, brand2: str, muted: str) -> None:
         border-color: var(--brand1);
         color: var(--brand1);
       }}
+      /* ── Navigation pill bar ── */
+      .nav-bar {{
+        display: flex;
+        flex-wrap: nowrap;
+        gap: 6px;
+        align-items: center;
+        background: var(--surface-alt);
+        border-radius: 14px;
+        padding: 8px 12px;
+        margin-bottom: 1.2rem;
+        overflow-x: auto;
+        scrollbar-width: none;
+      }}
+      .nav-bar::-webkit-scrollbar {{ display: none; }}
+      .nav-pill {{
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        white-space: nowrap;
+        padding: 6px 14px;
+        border-radius: 999px;
+        font-size: 0.82rem;
+        font-weight: 600;
+        cursor: pointer;
+        border: none;
+        transition: background 0.2s, color 0.2s, box-shadow 0.2s;
+        background: transparent;
+        color: var(--text-muted);
+        text-decoration: none;
+      }}
+      .nav-pill:hover {{
+        background: color-mix(in srgb, var(--brand1) 12%, transparent);
+        color: var(--brand1);
+      }}
+      .nav-pill.active {{
+        background: var(--brand1);
+        color: #fff;
+        box-shadow: 0 2px 8px color-mix(in srgb, var(--brand1) 40%, transparent);
+      }}
+      .nav-divider {{
+        width: 1px;
+        height: 20px;
+        background: var(--text-muted);
+        opacity: 0.25;
+        flex-shrink: 0;
+      }}
     </style>
     """,
         unsafe_allow_html=True,
@@ -491,18 +539,11 @@ def initialize_default_grids():
     st.session_state[GRID_KEY] = pd.DataFrame(rows)
     
     # Third Party
-    third_party_rows = []
-    for category in THIRD_PARTY_CATEGORIES:
-        third_party_rows.append({
-            "Category": category,
-            "Description": "",
-            "Basis": "% of Labour Cost",
-            "Percentage": 0.0,
-            "Fixed Amount": 0.0,
-            "Remarks": ""
-        })
-    st.session_state[THIRD_PARTY_KEY] = pd.DataFrame(third_party_rows)
-    
+    st.session_state[THIRD_PARTY_KEY] = pd.DataFrame([{"Category": "Third Party Services", "Description": "", "Basis": "Percentage of Labour Cost", "Percentage": 0.0, "Fixed Amount": 0.0, "Remarks": ""}])
+
+    # Non-Labour
+    st.session_state[NON_LABOUR_KEY] = pd.DataFrame([{"Category": "Non-Labour Cost", "Description": "", "Basis": "% of Labour Cost", "Percentage": 0.0, "Fixed Amount": 0.0, "Remarks": ""}])
+
     # Monthly Loading
     months = [f"Month {i+1:02d}" for i in range(12)]
     monthly_data = {
@@ -581,18 +622,11 @@ def reset_all():
     st.session_state[GRID_KEY] = pd.DataFrame(rows)
     
     # Reset Third Party
-    third_party_rows = []
-    for category in THIRD_PARTY_CATEGORIES:
-        third_party_rows.append({
-            "Category": category,
-            "Description": "",
-            "Basis": "% of Labour Cost",
-            "Percentage": 0.0,
-            "Fixed Amount": 0.0,
-            "Remarks": ""
-        })
-    st.session_state[THIRD_PARTY_KEY] = pd.DataFrame(third_party_rows)
-    
+    st.session_state[THIRD_PARTY_KEY] = pd.DataFrame([{"Category": "Third Party Services", "Description": "", "Basis": "% of Labour Cost", "Percentage": 0.0, "Fixed Amount": 0.0, "Remarks": ""}])
+
+    # Reset Non-Labour
+    st.session_state[NON_LABOUR_KEY] = pd.DataFrame([{"Category": "Non-Labour Cost", "Description": "", "Basis": "% of Labour Cost", "Percentage": 0.0, "Fixed Amount": 0.0, "Remarks": ""}])
+
     # Reset Monthly Loading
     months = [f"Month {i+1:02d}" for i in range(12)]
     monthly_data = {
@@ -930,9 +964,9 @@ def calculate_third_party_costs(df: pd.DataFrame, total_labour: float, currency:
     result[f"Cost ({currency})"] = 0.0
     
     for idx, row in result.iterrows():
-        if row["Basis"] == "% of Labour Cost":
+        if row["Basis"] in ("% of Labour Cost", "Percentage of Labour Cost"):
             result.loc[idx, f"Cost ({currency})"] = total_labour * (float(row["Percentage"]) / 100.0)
-        else:
+        else:  # LumpSum / Fixed Amount or legacy Fixed Amount
             result.loc[idx, f"Cost ({currency})"] = float(row["Fixed Amount"])
     
     return result[["Category", "Description", "Basis", f"Cost ({currency})", "Remarks"]]
@@ -1014,7 +1048,8 @@ def save_current_project():
     labour_df = calculate_labour_costs(st.session_state[GRID_KEY], currency, type_of_schedule, type_of_package)
     kpbi_labour_df = calculate_kpbi_labour_costs(st.session_state[GRID_KEY], currency, type_of_schedule, type_of_package)
     total_labour = float(labour_df[f"Labour Cost ({currency})"].sum()) if not labour_df.empty else 0.0
-    third_party_df = calculate_third_party_costs(st.session_state[THIRD_PARTY_KEY], total_labour, currency)
+    combined_tp_df = pd.concat([st.session_state[THIRD_PARTY_KEY], st.session_state.get(NON_LABOUR_KEY, pd.DataFrame())], ignore_index=True)
+    third_party_df = calculate_third_party_costs(combined_tp_df, total_labour, currency)
     totals = compute_totals(labour_df, kpbi_labour_df, third_party_df, st.session_state[MONTHLY_LOADING_KEY], currency)
     
     project_data = {
@@ -1253,17 +1288,9 @@ def render_table():
 
     # Bulk actions
     st.subheader("Bulk actions")
-    c_w, c_cat, c_type, c_dur = st.columns(4)
-    with c_w:
-        new_w = st.number_input("Weightage for ALL", min_value=0.0, step=0.1, value=0.0, key="bulk_w")
-        if st.button("Apply", key="apply_w", use_container_width=True):
-            df = st.session_state[GRID_KEY].copy()
-            df["Weightage (FTE)"] = float(st.session_state["bulk_w"])
-            st.session_state[GRID_KEY] = df
-            st.success("Applied!")
-            do_rerun()
+    _, c_cat, c_type, _ = st.columns([1, 2, 2, 1])
     with c_cat:
-        new_cat = st.selectbox("Category for ALL", categories, key="bulk_cat")
+        st.selectbox("Category for ALL", categories, key="bulk_cat")
         if st.button("Apply", key="apply_cat", use_container_width=True):
             df = st.session_state[GRID_KEY].copy()
             df["Category"] = st.session_state["bulk_cat"]
@@ -1271,44 +1298,12 @@ def render_table():
             st.success("Applied!")
             do_rerun()
     with c_type:
-        new_type = st.selectbox("Rate Type for ALL", RATE_TYPES if RATE_TYPES else UNIT_TYPES, key="bulk_type")
+        st.selectbox("Rate Type for ALL", RATE_TYPES if RATE_TYPES else UNIT_TYPES, key="bulk_type")
         if st.button("Apply", key="apply_type", use_container_width=True):
             df = st.session_state[GRID_KEY].copy()
             df["Type of Unit Rate"] = st.session_state["bulk_type"]
             st.session_state[GRID_KEY] = df
             st.success("Applied!")
-            do_rerun()
-    with c_dur:
-        new_dur = st.number_input("Duration for ALL", min_value=0, step=1, value=1, key="bulk_dur")
-        if st.button("Apply", key="apply_dur", use_container_width=True):
-            df = st.session_state[GRID_KEY].copy()
-            df["Duration (months)"] = int(st.session_state["bulk_dur"])
-            st.session_state[GRID_KEY] = df
-            st.success("Applied!")
-            do_rerun()
-
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        if st.button("➕ Add Row", use_container_width=True):
-            df = st.session_state[GRID_KEY].copy()
-            df.loc[len(df)] = {
-                "Swatch": "⬜",
-                "Discipline": list(DISCIPLINE_ROW_COUNTS.keys())[0],
-                "Personnel": PERSONNEL_LIST[0] if PERSONNEL_LIST else "",
-                "Category": categories[0] if categories else "",
-                "Type of Unit Rate": "Normalise",
-                "Weightage (FTE)": 0.0,
-                "Duration (months)": 1.0,
-            }
-            st.session_state[GRID_KEY] = df
-            do_rerun()
-    with c2:
-        if st.button("↺ Reset", use_container_width=True):
-            reset_grid()
-            do_rerun()
-    with c3:
-        if st.button("📅 Next", use_container_width=True):
-            st.session_state["page"] = "LOADING"
             do_rerun()
 
     # AG Grid
@@ -1354,14 +1349,35 @@ def render_table():
     except:
         st.warning("Grid update failed. Please refresh.")
 
+    # Buttons below table
+    b1, b2, b3 = st.columns(3)
+    with b1:
+        if st.button("➕ Add Row", use_container_width=True):
+            df = st.session_state[GRID_KEY].copy()
+            df.loc[len(df)] = {
+                "Swatch": "⬜",
+                "Discipline": list(DISCIPLINE_ROW_COUNTS.keys())[0],
+                "Personnel": PERSONNEL_LIST[0] if PERSONNEL_LIST else "",
+                "Category": categories[0] if categories else "",
+                "Type of Unit Rate": "Normalise",
+                "Weightage (FTE)": 0.0,
+                "Duration (months)": 1.0,
+            }
+            st.session_state[GRID_KEY] = df
+            do_rerun()
+    with b2:
+        if st.button("↺ Reset", use_container_width=True):
+            reset_grid()
+            do_rerun()
+    with b3:
+        if st.button("📅 Next", use_container_width=True):
+            st.session_state["page"] = "LOADING"
+            do_rerun()
+
     # Preview
     labour_df = calculate_labour_costs(st.session_state[GRID_KEY], currency, type_of_schedule, type_of_package)
     total = labour_df[f"Labour Cost ({currency})"].sum() if not labour_df.empty else 0
-    
-    if not labour_df.empty:
-        with st.expander("Debug: View rates found"):
-            st.dataframe(labour_df[["Discipline", "Personnel", "Category", "Type of Unit Rate", f"Unit Rate ({currency})"]])
-    
+
     st.markdown(
         f"""
         <div style="background: var(--surface-alt); padding: 1rem; border-radius: 10px;">
@@ -1371,77 +1387,566 @@ def render_table():
         unsafe_allow_html=True
     )
 
+    if not labour_df.empty:
+        with st.expander("Debug: View rates found"):
+            st.dataframe(labour_df[["Discipline", "Personnel", "Category", "Type of Unit Rate", f"Unit Rate ({currency})"]])
+
 
 def render_third_party():
-    st.header("💰 Third Party & Non-Labour Costs")
+    st.header("💰 Third Party Services")
     currency = currency_for(st.session_state["type_of_schedule"])
-    
-    labour_df = calculate_labour_costs(st.session_state[GRID_KEY], currency, 
+
+    labour_df = calculate_labour_costs(st.session_state[GRID_KEY], currency,
                                        st.session_state["type_of_schedule"],
                                        st.session_state["type_of_package"])
     total_labour = labour_df[f"Labour Cost ({currency})"].sum() if not labour_df.empty else 0
-    
+
     st.info(f"Current Total Labour Cost: {currency} {total_labour:,.2f}")
-    
+
     df = st.session_state[THIRD_PARTY_KEY].copy()
     if df.empty:
         initialize_default_grids()
         df = st.session_state[THIRD_PARTY_KEY].copy()
-    
-    # Display editable rows
+
+    # Handle pending row removal
+    remove_idx = st.session_state.pop("tp_remove_idx", None)
+    if remove_idx is not None and remove_idx in df.index:
+        df = df.drop(index=remove_idx).reset_index(drop=True)
+        st.session_state[THIRD_PARTY_KEY] = df
+        # Re-index sub-items session state after row removal
+        old_len = len(df) + 1  # before drop
+        for old_i in range(remove_idx, old_len):
+            old_key = f"tp_subitems_{old_i}"
+            new_key = f"tp_subitems_{old_i - 1}"
+            if old_i == remove_idx:
+                st.session_state.pop(old_key, None)
+            elif old_key in st.session_state:
+                st.session_state[new_key] = st.session_state.pop(old_key)
+        do_rerun()
+
+    # Display editable rows with labels and per-row delete button
+    basis_options = ["Percentage of Labour Cost", "LumpSum / Fixed Amount"]
+    # Migrate any old stored values
+    df["Basis"] = df["Basis"].replace({
+        "% of Labour Cost": "Percentage of Labour Cost",
+        "Fixed Amount": "LumpSum / Fixed Amount",
+    })
+
+    # Handle sub-item removal (keyed per parent row)
+    for _k, _v in list(st.session_state.items()):
+        if str(_k).startswith("tp_subremove_"):
+            parts = str(_k).split("_")
+            if len(parts) == 4:
+                p_idx, s_idx = int(parts[2]), int(parts[3])
+                sub_key = f"tp_subitems_{p_idx}"
+                if sub_key in st.session_state and s_idx < len(st.session_state[sub_key]):
+                    st.session_state[sub_key].pop(s_idx)
+                del st.session_state[_k]
+                do_rerun()
+
     for idx, row in df.iterrows():
-        cols = st.columns([2, 3, 1.5, 1.5, 2])
-        with cols[0]:
-            df.loc[idx, "Category"] = st.selectbox(f"cat_{idx}", THIRD_PARTY_CATEGORIES,
-                index=THIRD_PARTY_CATEGORIES.index(row["Category"]) if row["Category"] in THIRD_PARTY_CATEGORIES else 0,
-                label_visibility="collapsed", key=f"cat_{idx}")
-        with cols[1]:
-            df.loc[idx, "Description"] = st.text_input(f"desc_{idx}", value=row["Description"],
-                label_visibility="collapsed", key=f"desc_{idx}")
-        with cols[2]:
-            basis = ["% of Labour Cost", "Fixed Amount"]
-            df.loc[idx, "Basis"] = st.selectbox(f"basis_{idx}", basis,
-                index=basis.index(row["Basis"]) if row["Basis"] in basis else 0,
-                label_visibility="collapsed", key=f"basis_{idx}")
-        with cols[3]:
-            if df.loc[idx, "Basis"] == "% of Labour Cost":
-                df.loc[idx, "Percentage"] = st.number_input(f"pct_{idx}", min_value=0.0, max_value=100.0,
-                    value=float(row["Percentage"]), step=0.1, format="%.1f", label_visibility="collapsed", key=f"pct_{idx}")
-                df.loc[idx, "Fixed Amount"] = 0.0
-            else:
-                df.loc[idx, "Fixed Amount"] = st.number_input(f"amt_{idx}", min_value=0.0,
-                    value=float(row["Fixed Amount"]), step=100.0, format="%.2f", label_visibility="collapsed", key=f"amt_{idx}")
-                df.loc[idx, "Percentage"] = 0.0
-        with cols[4]:
-            df.loc[idx, "Remarks"] = st.text_input(f"rem_{idx}", value=row["Remarks"],
+        st.markdown(f"**Item {idx + 1}**")
+
+        current_basis = st.session_state.get(f"basis_{idx}", df.loc[idx, "Basis"])
+        if current_basis not in basis_options:
+            current_basis = basis_options[0]
+        is_lump = current_basis == "LumpSum / Fixed Amount"
+
+        df.loc[idx, "Category"] = "Third Party Services"
+
+        if is_lump:
+            # ── LumpSum: Basis | first Item Name | first Price | Del ──────────
+            sub_key = f"tp_subitems_{idx}"
+            if sub_key not in st.session_state:
+                existing_desc = row.get("Description", "")
+                existing_amt = float(row.get("Fixed Amount", 0.0))
+                st.session_state[sub_key] = [{"name": existing_desc, "price": existing_amt}]
+            subitems = st.session_state[sub_key]
+
+            # Row 1 headers
+            r1_basis, r1_name, r1_price, r1_del = st.columns([2.5, 2.5, 1.5, 0.5])
+            with r1_basis: st.caption("Basis")
+            with r1_name:  st.caption("Item Name")
+            with r1_price: st.caption(f"Price ({currency})")
+            with r1_del:   st.caption("Del")
+
+            # Row 1 inputs (basis + first sub-item inline)
+            r1_basis, r1_name, r1_price, r1_del = st.columns([2.5, 2.5, 1.5, 0.5])
+            with r1_basis:
+                df.loc[idx, "Basis"] = st.selectbox(
+                    f"basis_{idx}", basis_options,
+                    index=basis_options.index(current_basis),
+                    label_visibility="collapsed", key=f"basis_{idx}")
+            with r1_name:
+                subitems[0]["name"] = st.text_input(
+                    f"tp_sub_name_{idx}_0",
+                    value=subitems[0]["name"],
+                    placeholder="Item name…",
+                    label_visibility="collapsed",
+                    key=f"tp_sub_name_{idx}_0")
+            with r1_price:
+                subitems[0]["price"] = st.number_input(
+                    f"tp_sub_price_{idx}_0",
+                    min_value=0.0,
+                    value=float(subitems[0]["price"]),
+                    step=100.0, format="%.2f",
+                    label_visibility="collapsed",
+                    key=f"tp_sub_price_{idx}_0")
+            with r1_del:
+                if st.button(":red[✕]", key=f"tp_del_{idx}", help=f"Remove item {idx + 1}"):
+                    st.session_state["tp_remove_idx"] = idx
+                    do_rerun()
+
+            # Additional sub-items (index 1+)
+            for s_idx in range(1, len(subitems)):
+                sub = subitems[s_idx]
+                sp, c1, c2, c3 = st.columns([2.5, 2.5, 1.5, 0.5])
+                with c1:
+                    subitems[s_idx]["name"] = st.text_input(
+                        f"tp_sub_name_{idx}_{s_idx}",
+                        value=sub["name"],
+                        placeholder="Item name…",
+                        label_visibility="collapsed",
+                        key=f"tp_sub_name_{idx}_{s_idx}")
+                with c2:
+                    subitems[s_idx]["price"] = st.number_input(
+                        f"tp_sub_price_{idx}_{s_idx}",
+                        min_value=0.0,
+                        value=float(sub["price"]),
+                        step=100.0, format="%.2f",
+                        label_visibility="collapsed",
+                        key=f"tp_sub_price_{idx}_{s_idx}")
+                with c3:
+                    if st.button(":red[✕]", key=f"tp_sub_del_{idx}_{s_idx}",
+                                 help=f"Remove sub-item {s_idx + 1}"):
+                        st.session_state[f"tp_subremove_{idx}_{s_idx}"] = True
+                        do_rerun()
+
+            # Add Line + Subtotal — aligned to Item Name / Price columns
+            sub_total = sum(float(s["price"]) for s in subitems)
+            _, add_col, sub_col, _ = st.columns([2.5, 2.5, 1.5, 0.5])
+            with add_col:
+                if st.button("➕ Add Line", key=f"tp_sub_add_{idx}", use_container_width=True):
+                    st.session_state[sub_key].append({"name": "", "price": 0.0})
+                    do_rerun()
+            with sub_col:
+                st.markdown(
+                    f"<div style='text-align:right; line-height:2.4rem; font-size:1.05rem;'>"
+                    f"Subtotal: <strong style='color:var(--brand1); font-size:1.15rem;'>{currency} {sub_total:,.2f}</strong></div>",
+                    unsafe_allow_html=True)
+
+            # Remarks full-width below
+            st.caption("Remarks")
+            df.loc[idx, "Remarks"] = st.text_input(
+                f"rem_{idx}", value=row["Remarks"],
+                placeholder="Enter remarks…",
                 label_visibility="collapsed", key=f"rem_{idx}")
-    
+
+            # Write back
+            df.loc[idx, "Fixed Amount"] = sub_total
+            df.loc[idx, "Description"] = "; ".join(s["name"] for s in subitems if s["name"].strip())
+            df.loc[idx, "Percentage"] = 0.0
+
+        else:
+            # ── Percentage: Basis | Percentage | Del — Remarks full-width below
+            df.loc[idx, "Description"] = ""
+
+            # Row 1 headers
+            h_basis, h_pct, h_del = st.columns([3, 3, 0.5])
+            with h_basis: st.caption("Basis")
+            with h_pct:   st.caption("Percentage (%)")
+            with h_del:   st.caption("Del")
+
+            # Row 1 inputs
+            r_basis, r_pct, r_del = st.columns([3, 3, 0.5])
+            with r_basis:
+                df.loc[idx, "Basis"] = st.selectbox(
+                    f"basis_{idx}", basis_options,
+                    index=basis_options.index(current_basis),
+                    label_visibility="collapsed", key=f"basis_{idx}")
+            with r_pct:
+                df.loc[idx, "Percentage"] = st.number_input(
+                    f"pct_{idx}", min_value=0.0, max_value=100.0,
+                    value=float(row.get("Percentage", 0.0)), step=0.1, format="%.1f",
+                    label_visibility="collapsed", key=f"pct_{idx}")
+            with r_del:
+                if st.button(":red[✕]", key=f"tp_del_{idx}", help=f"Remove item {idx + 1}"):
+                    st.session_state["tp_remove_idx"] = idx
+                    do_rerun()
+
+            # Subtotal aligned under Percentage column
+            pct_val = float(st.session_state.get(f"pct_{idx}", row.get("Percentage", 0.0)))
+            pct_cost = total_labour * (pct_val / 100.0)
+            _, sub_pct_col, _ = st.columns([3, 3, 0.5])
+            with sub_pct_col:
+                st.markdown(
+                    f"<div style='text-align:right; font-size:1.05rem;'>"
+                    f"Subtotal: <strong style='color:var(--brand1); font-size:1.15rem;'>{currency} {pct_cost:,.2f}</strong></div>",
+                    unsafe_allow_html=True)
+
+            # Remarks spanning full width below
+            st.caption("Remarks")
+            df.loc[idx, "Remarks"] = st.text_input(
+                f"rem_{idx}", value=row["Remarks"],
+                placeholder="Enter remarks…",
+                label_visibility="collapsed", key=f"rem_{idx}")
+            df.loc[idx, "Fixed Amount"] = 0.0
+
+        st.markdown("---")
+
     st.session_state[THIRD_PARTY_KEY] = df
-    
-    col1, col2, col3 = st.columns(3)
+
+    col1, col2 = st.columns(2)
     with col1:
-        if st.button("➕ Add Item", use_container_width=True):
-            new = pd.DataFrame([{"Category": THIRD_PARTY_CATEGORIES[0], "Description": "", "Basis": "% of Labour Cost",
-                               "Percentage": 0.0, "Fixed Amount": 0.0, "Remarks": ""}])
-            st.session_state[THIRD_PARTY_KEY] = pd.concat([df, new], ignore_index=True)
+        if st.button("⬅️ Back", use_container_width=True):
+            st.session_state["page"] = "TABLE"
             do_rerun()
     with col2:
-        if st.button("🗑️ Remove Last", use_container_width=True) and len(df) > 0:
-            st.session_state[THIRD_PARTY_KEY] = df.iloc[:-1].reset_index(drop=True)
+        if st.button("🏭 Non-Labour →", use_container_width=True, type="primary"):
+            st.session_state["page"] = "NON_LABOUR"
             do_rerun()
-    with col3:
-        if st.button("📅 Next", use_container_width=True):
-            st.session_state["page"] = "LOADING"
-            do_rerun()
-    
+
     if len(df) > 0:
         costs = calculate_third_party_costs(df, total_labour, currency)
-        display = costs.copy()
-        display[f"Cost ({currency})"] = display[f"Cost ({currency})"].apply(lambda x: f"{x:,.2f}")
-        st.dataframe(display, use_container_width=True)
-        
         total = costs[f"Cost ({currency})"].sum()
-        st.markdown(f"<h3 style='color: var(--brand1);'>Total: {currency} {total:,.2f}</h3>", unsafe_allow_html=True)
+
+        with st.expander(f"📋 Cost Summary  —  Total: {currency} {total:,.2f}", expanded=False):
+            # Build expanded display: LumpSum rows split per sub-item
+            rows_display = []
+            for i, (_, row) in enumerate(df.iterrows()):
+                if row["Basis"] == "LumpSum / Fixed Amount":
+                    sub_key = f"tp_subitems_{i}"
+                    subitems = st.session_state.get(sub_key,
+                        [{"name": row.get("Description", ""), "price": float(row.get("Fixed Amount", 0))}])
+                    for sub in subitems:
+                        rows_display.append({
+                            "Category": row["Category"],
+                            "Item": sub["name"],
+                            "Basis": row["Basis"],
+                            f"Cost ({currency})": f"{float(sub['price']):,.2f}",
+                            "Remarks": row["Remarks"],
+                        })
+                else:
+                    pct_cost = total_labour * (float(row.get("Percentage", 0)) / 100.0)
+                    rows_display.append({
+                        "Category": row["Category"],
+                        "Item": row.get("Description", ""),
+                        "Basis": row["Basis"],
+                        f"Cost ({currency})": f"{pct_cost:,.2f}",
+                        "Remarks": row["Remarks"],
+                    })
+
+            display_df = pd.DataFrame(rows_display)
+            display_df.index = range(1, len(display_df) + 1)
+            st.dataframe(display_df, use_container_width=True)
+
+            st.markdown(f"<h3 style='color: var(--brand1);'>Total: {currency} {total:,.2f}</h3>", unsafe_allow_html=True)
+
+            # Pie chart — cost breakdown by item
+            chart_rows = []
+            for i, (_, row) in enumerate(df.iterrows()):
+                if row["Basis"] == "LumpSum / Fixed Amount":
+                    sub_key = f"tp_subitems_{i}"
+                    subitems = st.session_state.get(sub_key, [])
+                    for sub in subitems:
+                        if float(sub["price"]) > 0:
+                            chart_rows.append({"Label": sub["name"] or "(unnamed)", f"Cost ({currency})": float(sub["price"])})
+                else:
+                    pct_cost = total_labour * (float(row.get("Percentage", 0)) / 100.0)
+                    if pct_cost > 0:
+                        label = row.get("Description", "").strip() or f"Item {i + 1}"
+                        chart_rows.append({"Label": label, f"Cost ({currency})": pct_cost})
+
+            if chart_rows:
+                chart_df = pd.DataFrame(chart_rows)
+                fig = px.pie(
+                    chart_df,
+                    values=f"Cost ({currency})",
+                    names="Label",
+                    title=f"Third Party Cost Breakdown ({currency})",
+                    hole=0.4,
+                )
+                fig.update_traces(textinfo="percent+label", hovertemplate="%{label}<br>%{value:,.2f}<extra></extra>")
+                fig.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                                  legend=dict(orientation="h", yanchor="bottom", y=-0.3))
+                st.plotly_chart(fig, use_container_width=True)
+
+
+def render_non_labour():
+    st.header("🏭 Non-Labour Costs")
+    currency = currency_for(st.session_state["type_of_schedule"])
+
+    labour_df = calculate_labour_costs(st.session_state[GRID_KEY], currency,
+                                       st.session_state["type_of_schedule"],
+                                       st.session_state["type_of_package"])
+    total_labour = labour_df[f"Labour Cost ({currency})"].sum() if not labour_df.empty else 0
+
+    st.info(f"Current Total Labour Cost: {currency} {total_labour:,.2f}")
+
+    basis_options = ["Percentage of Labour Cost", "LumpSum / Fixed Amount"]
+
+    df = st.session_state.get(NON_LABOUR_KEY, pd.DataFrame()).copy()
+    if df.empty:
+        df = pd.DataFrame([{"Category": "Non-Labour Cost", "Description": "", "Basis": "Percentage of Labour Cost",
+                            "Percentage": 0.0, "Fixed Amount": 0.0, "Remarks": ""}])
+        st.session_state[NON_LABOUR_KEY] = df
+
+    # Migrate old basis labels
+    df["Basis"] = df["Basis"].replace({
+        "% of Labour Cost": "Percentage of Labour Cost",
+        "Fixed Amount": "LumpSum / Fixed Amount",
+    })
+
+    # Handle pending row removal (re-index sub-items)
+    remove_idx = st.session_state.pop("nl_remove_idx", None)
+    if remove_idx is not None and remove_idx in df.index:
+        old_len = len(df)
+        df = df.drop(index=remove_idx).reset_index(drop=True)
+        st.session_state[NON_LABOUR_KEY] = df
+        for old_i in range(remove_idx, old_len):
+            old_key = f"nl_subitems_{old_i}"
+            new_key = f"nl_subitems_{old_i - 1}"
+            if old_i == remove_idx:
+                st.session_state.pop(old_key, None)
+            elif old_key in st.session_state:
+                st.session_state[new_key] = st.session_state.pop(old_key)
+        do_rerun()
+
+    # Handle sub-item removal
+    for _k in list(st.session_state.keys()):
+        if str(_k).startswith("nl_subremove_"):
+            parts = str(_k).split("_")
+            if len(parts) == 4:
+                p_idx, s_idx = int(parts[2]), int(parts[3])
+                sub_key = f"nl_subitems_{p_idx}"
+                if sub_key in st.session_state and s_idx < len(st.session_state[sub_key]):
+                    st.session_state[sub_key].pop(s_idx)
+                del st.session_state[_k]
+                do_rerun()
+
+    for idx, row in df.iterrows():
+        st.markdown(f"**Item {idx + 1}**")
+
+        current_basis = st.session_state.get(f"nl_basis_{idx}", df.loc[idx, "Basis"])
+        if current_basis not in basis_options:
+            current_basis = basis_options[0]
+        is_lump = current_basis == "LumpSum / Fixed Amount"
+
+        df.loc[idx, "Category"] = "Non-Labour Cost"
+
+        if is_lump:
+            # ── LumpSum: Basis | first Item Name | first Price | Del ──────────
+            sub_key = f"nl_subitems_{idx}"
+            if sub_key not in st.session_state:
+                existing_desc = row.get("Description", "")
+                existing_amt = float(row.get("Fixed Amount", 0.0))
+                st.session_state[sub_key] = [{"name": existing_desc, "price": existing_amt}]
+            subitems = st.session_state[sub_key]
+
+            # Row 1 headers
+            r1_basis, r1_name, r1_price, r1_del = st.columns([2.5, 2.5, 1.5, 0.5])
+            with r1_basis: st.caption("Basis")
+            with r1_name:  st.caption("Item Name")
+            with r1_price: st.caption(f"Price ({currency})")
+            with r1_del:   st.caption("Del")
+
+            # Row 1 inputs (basis + first sub-item inline)
+            r1_basis, r1_name, r1_price, r1_del = st.columns([2.5, 2.5, 1.5, 0.5])
+            with r1_basis:
+                df.loc[idx, "Basis"] = st.selectbox(
+                    f"nl_basis_{idx}", basis_options,
+                    index=basis_options.index(current_basis),
+                    label_visibility="collapsed", key=f"nl_basis_{idx}")
+            with r1_name:
+                subitems[0]["name"] = st.text_input(
+                    f"nl_sub_name_{idx}_0",
+                    value=subitems[0]["name"],
+                    placeholder="Item name…",
+                    label_visibility="collapsed",
+                    key=f"nl_sub_name_{idx}_0")
+            with r1_price:
+                subitems[0]["price"] = st.number_input(
+                    f"nl_sub_price_{idx}_0",
+                    min_value=0.0,
+                    value=float(subitems[0]["price"]),
+                    step=100.0, format="%.2f",
+                    label_visibility="collapsed",
+                    key=f"nl_sub_price_{idx}_0")
+            with r1_del:
+                if st.button(":red[✕]", key=f"nl_del_{idx}", help=f"Remove item {idx + 1}"):
+                    st.session_state["nl_remove_idx"] = idx
+                    do_rerun()
+
+            # Additional sub-items (index 1+)
+            for s_idx in range(1, len(subitems)):
+                sub = subitems[s_idx]
+                _, c1, c2, c3 = st.columns([2.5, 2.5, 1.5, 0.5])
+                with c1:
+                    subitems[s_idx]["name"] = st.text_input(
+                        f"nl_sub_name_{idx}_{s_idx}",
+                        value=sub["name"],
+                        placeholder="Item name…",
+                        label_visibility="collapsed",
+                        key=f"nl_sub_name_{idx}_{s_idx}")
+                with c2:
+                    subitems[s_idx]["price"] = st.number_input(
+                        f"nl_sub_price_{idx}_{s_idx}",
+                        min_value=0.0,
+                        value=float(sub["price"]),
+                        step=100.0, format="%.2f",
+                        label_visibility="collapsed",
+                        key=f"nl_sub_price_{idx}_{s_idx}")
+                with c3:
+                    if st.button(":red[✕]", key=f"nl_sub_del_{idx}_{s_idx}",
+                                 help=f"Remove sub-item {s_idx + 1}"):
+                        st.session_state[f"nl_subremove_{idx}_{s_idx}"] = True
+                        do_rerun()
+
+            # Add Line + Subtotal aligned under Item Name / Price
+            sub_total = sum(float(s["price"]) for s in subitems)
+            _, add_col, sub_col, _ = st.columns([2.5, 2.5, 1.5, 0.5])
+            with add_col:
+                if st.button("➕ Add Line", key=f"nl_sub_add_{idx}", use_container_width=True):
+                    st.session_state[sub_key].append({"name": "", "price": 0.0})
+                    do_rerun()
+            with sub_col:
+                st.markdown(
+                    f"<div style='text-align:right; line-height:2.4rem; font-size:1.05rem;'>"
+                    f"Subtotal: <strong style='color:var(--brand1); font-size:1.15rem;'>{currency} {sub_total:,.2f}</strong></div>",
+                    unsafe_allow_html=True)
+
+            # Remarks full-width
+            st.caption("Remarks")
+            df.loc[idx, "Remarks"] = st.text_input(
+                f"nl_rem_{idx}", value=row["Remarks"],
+                placeholder="Enter remarks…",
+                label_visibility="collapsed", key=f"nl_rem_{idx}")
+
+            df.loc[idx, "Fixed Amount"] = sub_total
+            df.loc[idx, "Description"] = "; ".join(s["name"] for s in subitems if s["name"].strip())
+            df.loc[idx, "Percentage"] = 0.0
+
+        else:
+            # ── Percentage: Basis | Percentage | Del — Subtotal + Remarks below ──
+            df.loc[idx, "Description"] = ""
+
+            h_basis, h_pct, h_del = st.columns([3, 3, 0.5])
+            with h_basis: st.caption("Basis")
+            with h_pct:   st.caption("Percentage (%)")
+            with h_del:   st.caption("Del")
+
+            r_basis, r_pct, r_del = st.columns([3, 3, 0.5])
+            with r_basis:
+                df.loc[idx, "Basis"] = st.selectbox(
+                    f"nl_basis_{idx}", basis_options,
+                    index=basis_options.index(current_basis),
+                    label_visibility="collapsed", key=f"nl_basis_{idx}")
+            with r_pct:
+                df.loc[idx, "Percentage"] = st.number_input(
+                    f"nl_pct_{idx}", min_value=0.0, max_value=100.0,
+                    value=float(row.get("Percentage", 0.0)), step=0.1, format="%.1f",
+                    label_visibility="collapsed", key=f"nl_pct_{idx}")
+            with r_del:
+                if st.button(":red[✕]", key=f"nl_del_{idx}", help=f"Remove item {idx + 1}"):
+                    st.session_state["nl_remove_idx"] = idx
+                    do_rerun()
+
+            # Subtotal aligned under Percentage column
+            pct_val = float(st.session_state.get(f"nl_pct_{idx}", row.get("Percentage", 0.0)))
+            pct_cost = total_labour * (pct_val / 100.0)
+            _, sub_pct_col, _ = st.columns([3, 3, 0.5])
+            with sub_pct_col:
+                st.markdown(
+                    f"<div style='text-align:right; font-size:1.05rem;'>"
+                    f"Subtotal: <strong style='color:var(--brand1); font-size:1.15rem;'>{currency} {pct_cost:,.2f}</strong></div>",
+                    unsafe_allow_html=True)
+
+            # Remarks full-width
+            st.caption("Remarks")
+            df.loc[idx, "Remarks"] = st.text_input(
+                f"nl_rem_{idx}", value=row["Remarks"],
+                placeholder="Enter remarks…",
+                label_visibility="collapsed", key=f"nl_rem_{idx}")
+            df.loc[idx, "Fixed Amount"] = 0.0
+
+        st.markdown("---")
+
+    st.session_state[NON_LABOUR_KEY] = df
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("⬅️ Back", use_container_width=True):
+            st.session_state["page"] = "THIRD_PARTY"
+            do_rerun()
+    with col2:
+        if st.button("📅 Monthly Loading →", use_container_width=True, type="primary"):
+            st.session_state["page"] = "LOADING"
+            do_rerun()
+
+    if len(df) > 0:
+        costs = calculate_third_party_costs(df, total_labour, currency)
+        total = costs[f"Cost ({currency})"].sum()
+
+        with st.expander(f"📋 Cost Summary  —  Total: {currency} {total:,.2f}", expanded=False):
+            # Build expanded display: LumpSum rows split per sub-item
+            rows_display = []
+            for i, (_, row) in enumerate(df.iterrows()):
+                if row["Basis"] == "LumpSum / Fixed Amount":
+                    sub_key = f"nl_subitems_{i}"
+                    subitems = st.session_state.get(sub_key,
+                        [{"name": row.get("Description", ""), "price": float(row.get("Fixed Amount", 0))}])
+                    for sub in subitems:
+                        rows_display.append({
+                            "Category": row["Category"],
+                            "Item": sub["name"],
+                            "Basis": row["Basis"],
+                            f"Cost ({currency})": f"{float(sub['price']):,.2f}",
+                            "Remarks": row["Remarks"],
+                        })
+                else:
+                    pct_cost = total_labour * (float(row.get("Percentage", 0)) / 100.0)
+                    rows_display.append({
+                        "Category": row["Category"],
+                        "Item": row.get("Description", ""),
+                        "Basis": row["Basis"],
+                        f"Cost ({currency})": f"{pct_cost:,.2f}",
+                        "Remarks": row["Remarks"],
+                    })
+
+            display_df = pd.DataFrame(rows_display)
+            display_df.index = range(1, len(display_df) + 1)
+            st.dataframe(display_df, use_container_width=True)
+
+            st.markdown(f"<h3 style='color: var(--brand1);'>Total: {currency} {total:,.2f}</h3>", unsafe_allow_html=True)
+
+            # Pie chart — per sub-item breakdown
+            chart_rows = []
+            for i, (_, row) in enumerate(df.iterrows()):
+                if row["Basis"] == "LumpSum / Fixed Amount":
+                    sub_key = f"nl_subitems_{i}"
+                    subitems = st.session_state.get(sub_key, [])
+                    for sub in subitems:
+                        if float(sub["price"]) > 0:
+                            chart_rows.append({"Label": sub["name"] or "(unnamed)", f"Cost ({currency})": float(sub["price"])})
+                else:
+                    pct_cost = total_labour * (float(row.get("Percentage", 0)) / 100.0)
+                    if pct_cost > 0:
+                        label = row.get("Description", "").strip() or f"Item {i + 1}"
+                        chart_rows.append({"Label": label, f"Cost ({currency})": pct_cost})
+
+            if chart_rows:
+                chart_df = pd.DataFrame(chart_rows)
+                fig = px.pie(
+                    chart_df,
+                    values=f"Cost ({currency})",
+                    names="Label",
+                    title=f"Non-Labour Cost Breakdown ({currency})",
+                    hole=0.4,
+                )
+                fig.update_traces(textinfo="percent+label", hovertemplate="%{label}<br>%{value:,.2f}<extra></extra>")
+                fig.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                                  legend=dict(orientation="h", yanchor="bottom", y=-0.3))
+                st.plotly_chart(fig, use_container_width=True)
 
 
 def render_loading():
@@ -1453,7 +1958,8 @@ def render_loading():
                                        st.session_state["type_of_package"])
     total_labour = labour_df[f"Labour Cost ({currency})"].sum() if not labour_df.empty else 0
     
-    third_party_df = calculate_third_party_costs(st.session_state[THIRD_PARTY_KEY], total_labour, currency)
+    combined_tp_df = pd.concat([st.session_state[THIRD_PARTY_KEY], st.session_state.get(NON_LABOUR_KEY, pd.DataFrame())], ignore_index=True)
+    third_party_df = calculate_third_party_costs(combined_tp_df, total_labour, currency)
     
     df = st.session_state[MONTHLY_LOADING_KEY].copy()
     if df.empty:
@@ -1519,7 +2025,7 @@ def render_loading():
     col1, col2, col3 = st.columns(3)
     with col1:
         if st.button("⬅️ Back", use_container_width=True):
-            st.session_state["page"] = "THIRD_PARTY"
+            st.session_state["page"] = "NON_LABOUR"
             do_rerun()
     with col2:
         if st.button("📊 Totals", use_container_width=True, type="primary"):
@@ -1542,7 +2048,8 @@ def render_totals():
     kpbi_labour_df = calculate_kpbi_labour_costs(st.session_state[GRID_KEY], currency, schedule, package)
     total_labour = float(labour_df[f"Labour Cost ({currency})"].sum()) if not labour_df.empty else 0.0
     
-    third_df = calculate_third_party_costs(st.session_state[THIRD_PARTY_KEY], total_labour, currency)
+    combined_tp_df = pd.concat([st.session_state[THIRD_PARTY_KEY], st.session_state.get(NON_LABOUR_KEY, pd.DataFrame())], ignore_index=True)
+    third_df = calculate_third_party_costs(combined_tp_df, total_labour, currency)
     totals = compute_totals(labour_df, kpbi_labour_df, third_df, st.session_state[MONTHLY_LOADING_KEY], currency)
 
     st.markdown(
@@ -1637,7 +2144,8 @@ def render_summary():
     kpbi_labour_df = calculate_kpbi_labour_costs(st.session_state[GRID_KEY], currency, schedule, package)
     total_labour = float(labour_df[f"Labour Cost ({currency})"].sum()) if not labour_df.empty else 0.0
     
-    third_df = calculate_third_party_costs(st.session_state[THIRD_PARTY_KEY], total_labour, currency)
+    combined_tp_df = pd.concat([st.session_state[THIRD_PARTY_KEY], st.session_state.get(NON_LABOUR_KEY, pd.DataFrame())], ignore_index=True)
+    third_df = calculate_third_party_costs(combined_tp_df, total_labour, currency)
     totals = compute_totals(labour_df, kpbi_labour_df, third_df, st.session_state[MONTHLY_LOADING_KEY], currency)
 
     st.subheader("Project Information")
@@ -1801,6 +2309,8 @@ elif page == "TABLE":
     render_table()
 elif page == "THIRD_PARTY":
     render_third_party()
+elif page == "NON_LABOUR":
+    render_non_labour()
 elif page == "LOADING":
     render_loading()
 elif page == "TOTALS":
