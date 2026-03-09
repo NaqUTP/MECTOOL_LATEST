@@ -118,16 +118,15 @@ DISCIPLINE_SWATCH = {
     "Technical Safety": "🔶", "Material Corrosion Inspection": "🔷", "HSE": "🟥"
 }
 
-# Removed emojis from page labels
 PAGES = {
-    "MAIN": "Home",
-    "TABLE": "Personnel",
-    "THIRD_PARTY": "Third Party",
-    "NON_LABOUR": "Non-Labour",
-    "LOADING": "Loading",
-    "TOTALS": "Totals",
-    "SUMMARY": "Dashboard",
-    "COMPARE": "Compare",
+    "MAIN": "🏠  Home",
+    "TABLE": "👥  Personnel",
+    "THIRD_PARTY": "💰  Third Party",
+    "NON_LABOUR": "🏭  Non-Labour",
+    "LOADING": "📅  Loading",
+    "TOTALS": "📊  Totals",
+    "SUMMARY": "📈  Dashboard",
+    "COMPARE": "🔄  Compare",
 }
 
 GRID_KEY = "grid_df"
@@ -169,7 +168,7 @@ def init_session_state():
 init_session_state()
 
 # ─────────────────────────────────────────────────
-# Global CSS – PETRONAS design + white font for #r28
+# Global CSS – PETRONAS design
 def inject_css(dark: bool):
     if dark:
         bg          = PETRONAS["navy"]
@@ -219,11 +218,6 @@ def inject_css(dark: bool):
         --radius-lg:  16px;
         --shadow:     0 4px 24px rgba(0,0,0,0.15);
         --shadow-sm:  0 2px 8px rgba(0,0,0,0.10);
-    }}
-
-    /* Force white font for any element with id="r28" */
-    span#r28 {{
-        color: #FFFFFF !important;
     }}
 
     /* ── Base ── */
@@ -756,14 +750,14 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
-    dark_mode = st.toggle("Dark Mode", value=st.session_state["dark_mode"])
+    dark_mode = st.toggle("🌙  Dark Mode", value=st.session_state["dark_mode"])
     if dark_mode != st.session_state["dark_mode"]:
         st.session_state["dark_mode"] = dark_mode
         st.rerun()
 
     st.markdown("<hr style='border:none;border-top:1px solid var(--border);margin:0.75rem 0'>", unsafe_allow_html=True)
 
-    st.markdown("**MEC Rates**")
+    st.markdown("**📁 MEC Rates**")
     mec_file = st.file_uploader("Upload MEC.csv", type=["csv"], key="mec_uploader", label_visibility="collapsed")
     if mec_file is not None:
         st.success("✅ MEC.csv ready")
@@ -772,12 +766,12 @@ with st.sidebar:
             st.cache_data.clear()
             st.rerun()
     else:
-        st.warning("MEC.csv required")
+        st.warning("⚠️ MEC.csv required")
         st.stop()
 
     st.markdown("<hr style='border:none;border-top:1px solid var(--border);margin:0.75rem 0'>", unsafe_allow_html=True)
 
-    st.markdown("**MDR Hours**")
+    st.markdown("**📁 MDR Hours**")
     mdr_file = st.file_uploader("Upload MDR.csv", type=["csv"], key="mdr_uploader", label_visibility="collapsed")
     if mdr_file is not None:
         st.success("✅ MDR.csv ready")
@@ -796,13 +790,14 @@ with st.sidebar:
     title_now = st.session_state.get("project_title", "—") or "Untitled"
     st.markdown(f"""
     <div style="font-size:0.78rem; color:var(--text-muted); line-height:1.8">
+        <div>🗂 <strong style="color:var(--text)">{title_now}</strong></div>
         <div>📋 Schedule: <strong style="color:var(--teal)">{sched_now}</strong></div>
         <div>📦 Package: <strong style="color:var(--teal)">{pkg_now}</strong></div>
     </div>
     """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────
-# Helpers (unchanged)
+# Helpers
 NBSP = "\xa0"
 _num = re.compile(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?")
 
@@ -920,7 +915,7 @@ def reset_all():
         "Weightage Distribution": [100.0/12]*12
     })
     st.session_state["page"] = "MAIN"
-    st.success("Project reset. Saved projects preserved.")
+    st.success("✅ Project reset. Saved projects preserved.")
 
 # ─────────────────────────────────────────────────
 # CSV loaders
@@ -1266,7 +1261,7 @@ def render_step_bar():
     st.markdown(html, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────
-# Navigation bar (no emojis)
+# Navigation bar
 def render_navigation():
     page_order = list(PAGES.items())
     n = len(page_order)
@@ -1281,7 +1276,7 @@ def render_navigation():
     st.markdown("<hr style='border:none;border-top:1px solid var(--border);margin:0.25rem 0 1.5rem 0'>", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────
-# Section header helper (no emojis)
+# Section header helper
 def section_header(title, icon=""):
     st.markdown(f"""
     <div class="section-header fadeup">
@@ -1291,7 +1286,7 @@ def section_header(title, icon=""):
     """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────
-# Page: MAIN (no emojis)
+# Page: MAIN
 def render_main():
     # Banner
     data_status = ""
@@ -1302,7 +1297,7 @@ def render_main():
 
     st.markdown(f"""
     <div class="petronas-banner fadeup">
-        <h1>MEC Tool</h1>
+        <h1>⛽ MEC Tool</h1>
         <p class="subtitle">Major Engineering Contract Cost Estimation — PETRONAS Upstream CE</p>
         {data_status}
     </div>
@@ -1310,7 +1305,7 @@ def render_main():
 
     col_reset = st.columns([6, 1])
     with col_reset[1]:
-        if st.button("New Project", use_container_width=True):
+        if st.button("🔄  New Project", use_container_width=True):
             reset_all(); st.rerun()
 
     render_step_bar()
@@ -1366,17 +1361,17 @@ def render_main():
     st.markdown("<br>", unsafe_allow_html=True)
     b1, b2, b3 = st.columns(3, gap="small")
     with b1:
-        if st.button("Go to Personnel →", use_container_width=True, type="primary"):
+        if st.button("👥  Go to Personnel →", use_container_width=True, type="primary"):
             st.session_state["page"] = "TABLE"; st.rerun()
     with b2:
-        if st.button("Reset Grid", use_container_width=True):
+        if st.button("↺  Reset Grid", use_container_width=True):
             reset_grid(); st.rerun()
     with b3:
-        if st.button("Third Party →", use_container_width=True):
+        if st.button("💰  Third Party →", use_container_width=True):
             st.session_state["page"] = "THIRD_PARTY"; st.rerun()
 
 # ─────────────────────────────────────────────────
-# Page: TABLE (no emojis)
+# Page: TABLE
 def render_table():
     sched = st.session_state["type_of_schedule"]
     pkg   = st.session_state["type_of_package"]
@@ -1385,7 +1380,7 @@ def render_table():
 
     st.markdown(f"""
     <div class="petronas-banner fadeup">
-        <h1>Personnel Table</h1>
+        <h1>👥 Personnel Table</h1>
         <p class="subtitle">Configure discipline resources — Schedule {sched} · Package {pkg} · {curr}</p>
     </div>
     """, unsafe_allow_html=True)
@@ -1454,7 +1449,7 @@ def render_table():
 
     b1, b2, b3 = st.columns(3, gap="small")
     with b1:
-        if st.button("Add Row", use_container_width=True):
+        if st.button("➕  Add Row", use_container_width=True):
             df = st.session_state[GRID_KEY].copy()
             df.loc[len(df)] = {
                 "Swatch": "⬜", "Discipline": list(DISCIPLINE_ROW_COUNTS.keys())[0],
@@ -1464,10 +1459,10 @@ def render_table():
             }
             st.session_state[GRID_KEY] = df; st.rerun()
     with b2:
-        if st.button("Reset", use_container_width=True):
+        if st.button("↺  Reset", use_container_width=True):
             reset_grid(); st.rerun()
     with b3:
-        if st.button("Next →", use_container_width=True, type="primary"):
+        if st.button("📅  Next →", use_container_width=True, type="primary"):
             st.session_state["page"] = "LOADING"; st.rerun()
 
     # Live total
@@ -1490,7 +1485,7 @@ def render_table():
         </div>""", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────
-# Page: TOTALS (no emojis)
+# Page: TOTALS
 def render_totals():
     sched = st.session_state["type_of_schedule"]
     pkg   = st.session_state["type_of_package"]
@@ -1504,7 +1499,7 @@ def render_totals():
 
     st.markdown(f"""
     <div class="petronas-banner fadeup">
-        <h1>Project Totals</h1>
+        <h1>📊 Project Totals</h1>
         <p class="subtitle">Cost summary — Schedule {sched} · Package {pkg} · {curr}</p>
     </div>
     """, unsafe_allow_html=True)
@@ -1548,20 +1543,20 @@ def render_totals():
 
     b1, b2, b3, b4 = st.columns(4, gap="small")
     with b1:
-        if st.button("Back", use_container_width=True):
+        if st.button("⬅️  Back", use_container_width=True):
             st.session_state["page"] = "LOADING"; st.rerun()
     with b2:
-        if st.button("Save Project", use_container_width=True):
-            save_current_project(); st.success("Project saved!"); st.rerun()
+        if st.button("💾  Save Project", use_container_width=True):
+            save_current_project(); st.success("✅ Project saved!"); st.rerun()
     with b3:
-        if st.button("Dashboard", use_container_width=True, type="primary"):
+        if st.button("📈  Dashboard", use_container_width=True, type="primary"):
             st.session_state["page"] = "SUMMARY"; st.rerun()
     with b4:
-        if st.button("Compare", use_container_width=True):
+        if st.button("🔄  Compare", use_container_width=True):
             st.session_state["page"] = "COMPARE"; st.rerun()
 
 # ─────────────────────────────────────────────────
-# Page: SUMMARY (no emojis)
+# Page: SUMMARY
 def render_summary():
     sched = st.session_state["type_of_schedule"]
     pkg   = st.session_state["type_of_package"]
@@ -1584,7 +1579,7 @@ def render_summary():
 
     st.markdown(f"""
     <div class="petronas-banner fadeup">
-        <h1>Project Dashboard</h1>
+        <h1>📈 Project Dashboard</h1>
         <p class="subtitle">{st.session_state['project_title'] or 'Untitled Project'} — {sched} · {pkg} · {curr}</p>
     </div>
     """, unsafe_allow_html=True)
@@ -1672,7 +1667,7 @@ def render_summary():
         summary_rows.append({"Description":"C Non-Labour Cost","Manhour":"",
                              f"Total Price ({curr})":f"{non_cost:,.2f}"})
     summary_rows.append({
-        "Description": "Total Raw Bid Price (Base Scope)",
+        "Description": "🏆  Total Raw Bid Price (Base Scope)",
         "Manhour": f"{totals['total_hours']:,.0f}",
         f"Total Price ({curr})": f"{totals['total_exact']:,.2f}"
     })
@@ -1681,25 +1676,25 @@ def render_summary():
     st.markdown("<div class='pdivider'></div>", unsafe_allow_html=True)
     b1, b2, b3, b4 = st.columns(4, gap="small")
     with b1:
-        if st.button("Back", use_container_width=True):
+        if st.button("⬅️  Back", use_container_width=True):
             st.session_state["page"] = "TOTALS"; st.rerun()
     with b2:
-        if st.button("Save Project", use_container_width=True):
-            save_current_project(); st.success("Saved!"); st.rerun()
+        if st.button("💾  Save Project", use_container_width=True):
+            save_current_project(); st.success("✅ Saved!"); st.rerun()
     with b3:
-        if st.button("Compare", use_container_width=True):
+        if st.button("🔄  Compare", use_container_width=True):
             st.session_state["page"] = "COMPARE"; st.rerun()
     with b4:
         excel = to_excel_bytes(meta, totals, labour, third, st.session_state[MONTHLY_LOADING_KEY], curr)
         st.download_button(
-            "Excel Report", data=excel,
+            "📥  Excel Report", data=excel,
             file_name=f"MEC_{st.session_state['project_title'] or 'Output'}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True, type="primary"
         )
 
 # ─────────────────────────────────────────────────
-# Page: THIRD PARTY (no emojis)
+# Page: THIRD PARTY
 def render_third_party():
     currency = currency_for(st.session_state["type_of_schedule"])
     labour_df = calculate_labour_costs(st.session_state[GRID_KEY], currency,
@@ -1709,7 +1704,7 @@ def render_third_party():
 
     st.markdown(f"""
     <div class="petronas-banner fadeup">
-        <h1>Third Party Services</h1>
+        <h1>💰 Third Party Services</h1>
         <p class="subtitle">Define third-party costs — base labour: {currency} {total_labour:,.2f}</p>
     </div>
     """, unsafe_allow_html=True)
@@ -1763,13 +1758,13 @@ def render_third_party():
 
     col1, col2 = st.columns(2, gap="small")
     with col1:
-        if st.button("Add Item", use_container_width=True):
+        if st.button("➕  Add Item", use_container_width=True):
             new = pd.DataFrame([{"Category":"Third Party Services","Description":"",
                                  "Basis":"Percentage of Labour Cost","Percentage":0.0,
                                  "Fixed Amount":0.0,"Remarks":""}])
             st.session_state[THIRD_PARTY_KEY] = pd.concat([df, new], ignore_index=True); st.rerun()
     with col2:
-        if st.button("Non-Labour →", use_container_width=True, type="primary"):
+        if st.button("🏭  Non-Labour →", use_container_width=True, type="primary"):
             st.session_state["page"] = "NON_LABOUR"; st.rerun()
 
     if len(df) > 0:
@@ -1785,7 +1780,7 @@ def render_third_party():
         </div>""", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────
-# Page: NON-LABOUR (no emojis)
+# Page: NON-LABOUR
 def render_non_labour():
     currency = currency_for(st.session_state["type_of_schedule"])
     labour_df = calculate_labour_costs(st.session_state[GRID_KEY], currency,
@@ -1795,7 +1790,7 @@ def render_non_labour():
 
     st.markdown(f"""
     <div class="petronas-banner fadeup">
-        <h1>Non-Labour Costs</h1>
+        <h1>🏭 Non-Labour Costs</h1>
         <p class="subtitle">Define non-labour costs — base labour: {currency} {total_labour:,.2f}</p>
     </div>
     """, unsafe_allow_html=True)
@@ -1847,13 +1842,13 @@ def render_non_labour():
 
     col1, col2 = st.columns(2, gap="small")
     with col1:
-        if st.button("Add Item", use_container_width=True):
+        if st.button("➕  Add Item", use_container_width=True):
             new = pd.DataFrame([{"Category":"Non-Labour Cost","Description":"",
                                  "Basis":"Percentage of Labour Cost","Percentage":0.0,
                                  "Fixed Amount":0.0,"Remarks":""}])
             st.session_state[NON_LABOUR_KEY] = pd.concat([df, new], ignore_index=True); st.rerun()
     with col2:
-        if st.button("Monthly Loading →", use_container_width=True, type="primary"):
+        if st.button("📅  Monthly Loading →", use_container_width=True, type="primary"):
             st.session_state["page"] = "LOADING"; st.rerun()
 
     if len(df) > 0:
@@ -1869,7 +1864,7 @@ def render_non_labour():
         </div>""", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────
-# Page: LOADING (no emojis)
+# Page: LOADING
 def render_loading():
     currency = currency_for(st.session_state["type_of_schedule"])
     labour_df = calculate_labour_costs(st.session_state[GRID_KEY], currency,
@@ -1882,7 +1877,7 @@ def render_loading():
 
     st.markdown(f"""
     <div class="petronas-banner fadeup">
-        <h1>Monthly Loading</h1>
+        <h1>📅 Monthly Loading</h1>
         <p class="subtitle">Distribute costs across project duration — {currency} {total_labour:,.2f} base labour</p>
     </div>
     """, unsafe_allow_html=True)
@@ -1966,13 +1961,13 @@ def render_loading():
 
     b1, b2, b3 = st.columns(3, gap="small")
     with b1:
-        if st.button("Back", use_container_width=True):
+        if st.button("⬅️  Back", use_container_width=True):
             st.session_state["page"] = "NON_LABOUR"; st.rerun()
     with b2:
-        if st.button("Totals →", use_container_width=True, type="primary"):
+        if st.button("📊  Totals →", use_container_width=True, type="primary"):
             st.session_state["page"] = "TOTALS"; st.rerun()
     with b3:
-        if st.button("Reset", use_container_width=True):
+        if st.button("↺  Reset", use_container_width=True):
             months = [f"Month {i+1:02d}" for i in range(12)]
             st.session_state[MONTHLY_LOADING_KEY] = pd.DataFrame({
                 "Month": months, "Loading Factor (%)": [100.0]*12,
@@ -1980,11 +1975,11 @@ def render_loading():
             }); st.rerun()
 
 # ─────────────────────────────────────────────────
-# Page: COMPARE (no emojis)
+# Page: COMPARE
 def render_compare():
     st.markdown(f"""
     <div class="petronas-banner fadeup">
-        <h1>Project Comparison</h1>
+        <h1>🔄 Project Comparison</h1>
         <p class="subtitle">Compare saved project scenarios side-by-side</p>
     </div>
     """, unsafe_allow_html=True)
@@ -1992,16 +1987,16 @@ def render_compare():
     saved = st.session_state.get(SAVED_PROJECTS_KEY, [])
     if not saved:
         st.info("No saved projects yet. Save a project from the Totals or Dashboard page.")
-        if st.button("Back to Dashboard"):
+        if st.button("⬅️  Back to Dashboard"):
             st.session_state["page"] = "SUMMARY"; st.rerun()
         return
 
     display = [f"{p['name']}  ({p['type_of_schedule']}, {p['type_of_package']}, {p['currency']})" for p in saved]
     col1, col2 = st.columns(2, gap="large")
     with col1:
-        i1 = st.selectbox("First Project",  range(len(saved)), format_func=lambda i: display[i], key="c1")
+        i1 = st.selectbox("📂 First Project",  range(len(saved)), format_func=lambda i: display[i], key="c1")
     with col2:
-        i2 = st.selectbox("Second Project", range(len(saved)), format_func=lambda i: display[i],
+        i2 = st.selectbox("📂 Second Project", range(len(saved)), format_func=lambda i: display[i],
                          index=min(1, len(saved)-1), key="c2")
 
     if i1 == i2:
@@ -2071,14 +2066,14 @@ def render_compare():
 
     col1, col2 = st.columns(2, gap="small")
     with col1:
-        if st.button("Clear All", use_container_width=True):
+        if st.button("🗑️  Clear All", use_container_width=True):
             st.session_state[SAVED_PROJECTS_KEY] = []; st.rerun()
     with col2:
-        if st.button("Back to Dashboard", use_container_width=True, type="primary"):
+        if st.button("⬅️  Back to Dashboard", use_container_width=True, type="primary"):
             st.session_state["page"] = "SUMMARY"; st.rerun()
 
 # ─────────────────────────────────────────────────
-# App header (no emojis)
+# App header
 st.markdown(f"""
 <div style="display:flex;align-items:center;gap:1rem;margin-bottom:0.5rem">
     <div style="font-size:1.5rem">⛽</div>
