@@ -30,6 +30,7 @@ except Exception:
 # Page config – must be FIRST Streamlit command
 st.set_page_config(
     page_title="MEC TOOL | PETRONAS",
+    page_icon="⛽",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -110,22 +111,22 @@ DISCIPLINE_COLORS = {
 }
 
 DISCIPLINE_SWATCH = {
-    "General": "GEN", "Process": "PRC", "Mechanical Static": "MST",
-    "Mechanical Rotating": "MRT", "Mechanical Piping": "MPP",
-    "Instrument and Control": "I&C", "Telecommunication": "TEL",
-    "Electrical": "ELC", "Structural": "STR", "Pipeline": "PIP",
-    "Technical Safety": "TSF", "Material Corrosion Inspection": "MCI", "HSE": "HSE"
+    "General": "🟦", "Process": "🟩", "Mechanical Static": "🟪",
+    "Mechanical Rotating": "🟢", "Mechanical Piping": "🔴",
+    "Instrument and Control": "🟫", "Telecommunication": "🔵",
+    "Electrical": "🟡", "Structural": "🟠", "Pipeline": "⚫",
+    "Technical Safety": "🔶", "Material Corrosion Inspection": "🔷", "HSE": "🟥"
 }
 
 PAGES = {
-    "MAIN": "Home",
-    "TABLE": "Personnel",
-    "THIRD_PARTY": "Third Party",
-    "NON_LABOUR": "Non-Labour",
-    "LOADING": "Loading",
-    "TOTALS": "Totals",
-    "SUMMARY": "Dashboard",
-    "COMPARE": "Compare",
+    "MAIN": "🏠  Home",
+    "TABLE": "👥  Personnel",
+    "THIRD_PARTY": "💰  Third Party",
+    "NON_LABOUR": "🏭  Non-Labour",
+    "LOADING": "📅  Loading",
+    "TOTALS": "📊  Totals",
+    "SUMMARY": "📈  Dashboard",
+    "COMPARE": "🔄  Compare",
 }
 
 GRID_KEY = "grid_df"
@@ -688,23 +689,6 @@ def inject_css(dark: bool):
         font-size: 0.88rem !important;
     }}
 
-    /* ── Nav button text – always white ── */
-    div.stButton > button > div > p,
-    div.stButton > button p,
-    div.stButton > button span {{
-        color: #ffffff !important;
-    }}
-    div.stButton > button[kind="secondary"] > div > p,
-    div.stButton > button[kind="secondary"] p,
-    div.stButton > button[kind="secondary"] span {{
-        color: #ffffff !important;
-    }}
-    div.stButton > button[kind="secondary"]:hover > div > p,
-    div.stButton > button[kind="secondary"]:hover p,
-    div.stButton > button[kind="secondary"]:hover span {{
-        color: #ffffff !important;
-    }}
-
     /* ── Hide streamlit branding ── */
     #MainMenu {{ visibility: hidden; }}
     footer {{ visibility: hidden; }}
@@ -758,7 +742,7 @@ with st.sidebar:
     # Logo
     st.markdown("""
     <div class="sidebar-logo">
-        <div class="logo-icon">MEC</div>
+        <div class="logo-icon">⛽</div>
         <div>
             <div class="logo-text">MEC TOOL</div>
             <div class="logo-sub">PETRONAS UPSTREAM CE</div>
@@ -766,31 +750,31 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
-    dark_mode = st.toggle("Dark Mode", value=st.session_state["dark_mode"])
+    dark_mode = st.toggle("🌙  Dark Mode", value=st.session_state["dark_mode"])
     if dark_mode != st.session_state["dark_mode"]:
         st.session_state["dark_mode"] = dark_mode
         st.rerun()
 
     st.markdown("<hr style='border:none;border-top:1px solid var(--border);margin:0.75rem 0'>", unsafe_allow_html=True)
 
-    st.markdown("**MEC Rates**")
+    st.markdown("**📁 MEC Rates**")
     mec_file = st.file_uploader("Upload MEC.csv", type=["csv"], key="mec_uploader", label_visibility="collapsed")
     if mec_file is not None:
-        st.success("MEC.csv ready")
+        st.success("✅ MEC.csv ready")
         if st.button("Load MEC Data", use_container_width=True, type="primary"):
             st.session_state["mec_data_loaded"] = False
             st.cache_data.clear()
             st.rerun()
     else:
-        st.warning("MEC.csv required")
+        st.warning("⚠️ MEC.csv required")
         st.stop()
 
     st.markdown("<hr style='border:none;border-top:1px solid var(--border);margin:0.75rem 0'>", unsafe_allow_html=True)
 
-    st.markdown("**MDR Hours**")
+    st.markdown("**📁 MDR Hours**")
     mdr_file = st.file_uploader("Upload MDR.csv", type=["csv"], key="mdr_uploader", label_visibility="collapsed")
     if mdr_file is not None:
-        st.success("MDR.csv ready")
+        st.success("✅ MDR.csv ready")
         if st.button("Load MDR Data", use_container_width=True, type="primary"):
             st.session_state["mdr_data_loaded"] = False
             st.cache_data.clear()
@@ -806,9 +790,9 @@ with st.sidebar:
     title_now = st.session_state.get("project_title", "—") or "Untitled"
     st.markdown(f"""
     <div style="font-size:0.78rem; color:var(--text-muted); line-height:1.8">
-        <div>Project: <strong style="color:var(--text)">{title_now}</strong></div>
-        <div>Schedule: <strong style="color:var(--teal)">{sched_now}</strong></div>
-        <div>Package: <strong style="color:var(--teal)">{pkg_now}</strong></div>
+        <div>🗂 <strong style="color:var(--text)">{title_now}</strong></div>
+        <div>📋 Schedule: <strong style="color:var(--teal)">{sched_now}</strong></div>
+        <div>📦 Package: <strong style="color:var(--teal)">{pkg_now}</strong></div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -883,7 +867,7 @@ def initialize_default_grids():
             try: total_hrs = float(row["Total (Hours)"])
             except: total_hrs = 0.0
             rows.append({
-                "Swatch": DISCIPLINE_SWATCH.get(disc, "—"),
+                "Swatch": DISCIPLINE_SWATCH.get(disc, "⬜"),
                 "Discipline": disc, "Personnel": pers,
                 "Category": categories[0] if categories else "",
                 "Type of Unit Rate": "Normalise",
@@ -896,7 +880,7 @@ def initialize_default_grids():
             for i in range(count):
                 pers = defaults[i] if i < len(defaults) else ""
                 rows.append({
-                    "Swatch": DISCIPLINE_SWATCH.get(disc, "—"),
+                    "Swatch": DISCIPLINE_SWATCH.get(disc, "⬜"),
                     "Discipline": disc, "Personnel": pers,
                     "Category": categories[0] if categories else "",
                     "Type of Unit Rate": "Normalise",
@@ -931,7 +915,7 @@ def reset_all():
         "Weightage Distribution": [100.0/12]*12
     })
     st.session_state["page"] = "MAIN"
-    st.success("Project reset. Saved projects preserved.")
+    st.success("✅ Project reset. Saved projects preserved.")
 
 # ─────────────────────────────────────────────────
 # CSV loaders
@@ -1267,7 +1251,7 @@ def render_step_bar():
         done   = PAGE_STEPS.index(current) > i if current in PAGE_STEPS else False
         active = step == current
         cls    = "active" if active else ("done" if done else "")
-        icon   = "v" if done else str(i+1)
+        icon   = "✓" if done else str(i+1)
         html += f'''
         <div class="step-item {'active' if active else ''}">
             <div class="step-dot {cls}">{icon}</div>
@@ -1313,7 +1297,7 @@ def render_main():
 
     st.markdown(f"""
     <div class="petronas-banner fadeup">
-        <h1>MEC Tool</h1>
+        <h1>⛽ MEC Tool</h1>
         <p class="subtitle">Major Engineering Contract Cost Estimation — PETRONAS Upstream CE</p>
         {data_status}
     </div>
@@ -1321,12 +1305,12 @@ def render_main():
 
     col_reset = st.columns([6, 1])
     with col_reset[1]:
-        if st.button("New Project", use_container_width=True):
+        if st.button("🔄  New Project", use_container_width=True):
             reset_all(); st.rerun()
 
     render_step_bar()
 
-    section_header("Project Information")
+    section_header("Project Information", "📋")
     mp1, mp2 = st.columns(2, gap="large")
 
     with mp1:
@@ -1377,13 +1361,13 @@ def render_main():
     st.markdown("<br>", unsafe_allow_html=True)
     b1, b2, b3 = st.columns(3, gap="small")
     with b1:
-        if st.button("Go to Personnel", use_container_width=True, type="primary"):
+        if st.button("👥  Go to Personnel →", use_container_width=True, type="primary"):
             st.session_state["page"] = "TABLE"; st.rerun()
     with b2:
-        if st.button("Reset Grid", use_container_width=True):
+        if st.button("↺  Reset Grid", use_container_width=True):
             reset_grid(); st.rerun()
     with b3:
-        if st.button("Third Party", use_container_width=True):
+        if st.button("💰  Third Party →", use_container_width=True):
             st.session_state["page"] = "THIRD_PARTY"; st.rerun()
 
 # ─────────────────────────────────────────────────
@@ -1396,7 +1380,7 @@ def render_table():
 
     st.markdown(f"""
     <div class="petronas-banner fadeup">
-        <h1>Personnel Table</h1>
+        <h1>👥 Personnel Table</h1>
         <p class="subtitle">Configure discipline resources — Schedule {sched} · Package {pkg} · {curr}</p>
     </div>
     """, unsafe_allow_html=True)
@@ -1408,11 +1392,11 @@ def render_table():
         initialize_default_grids()
         df = st.session_state[GRID_KEY].copy()
     df["Category"] = df["Category"].where(df["Category"].isin(cats), cats[0] if cats else "")
-    df["Swatch"]   = df["Discipline"].map(DISCIPLINE_SWATCH).fillna("—")
+    df["Swatch"]   = df["Discipline"].map(DISCIPLINE_SWATCH).fillna("⬜")
     st.session_state[GRID_KEY] = df
 
     # Bulk actions
-    section_header("Bulk Actions")
+    section_header("Bulk Actions", "⚡")
     bc1, bc2, bc3, bc4 = st.columns([2,1,2,1], gap="small")
     with bc1:
         st.selectbox("Category for ALL rows", cats, key="bulk_cat")
@@ -1428,7 +1412,7 @@ def render_table():
             st.session_state[GRID_KEY] = df; st.rerun()
 
     st.markdown("<div class='pdivider'></div>", unsafe_allow_html=True)
-    section_header("Personnel Grid")
+    section_header("Personnel Grid", "📋")
 
     gb = GridOptionsBuilder.from_dataframe(df)
     gb.configure_default_column(resizable=True, sortable=True, filter=True)
@@ -1465,20 +1449,20 @@ def render_table():
 
     b1, b2, b3 = st.columns(3, gap="small")
     with b1:
-        if st.button("Add Row", use_container_width=True):
+        if st.button("➕  Add Row", use_container_width=True):
             df = st.session_state[GRID_KEY].copy()
             df.loc[len(df)] = {
-                "Swatch": "—", "Discipline": list(DISCIPLINE_ROW_COUNTS.keys())[0],
+                "Swatch": "⬜", "Discipline": list(DISCIPLINE_ROW_COUNTS.keys())[0],
                 "Personnel": PERSONNEL_LIST[0] if PERSONNEL_LIST else "",
                 "Category": cats[0] if cats else "", "Type of Unit Rate": "Normalise",
                 "Total Hours": 0.0, "Weightage (FTE)": 0.0
             }
             st.session_state[GRID_KEY] = df; st.rerun()
     with b2:
-        if st.button("Reset", use_container_width=True):
+        if st.button("↺  Reset", use_container_width=True):
             reset_grid(); st.rerun()
     with b3:
-        if st.button("Next", use_container_width=True, type="primary"):
+        if st.button("📅  Next →", use_container_width=True, type="primary"):
             st.session_state["page"] = "LOADING"; st.rerun()
 
     # Live total
@@ -1515,7 +1499,7 @@ def render_totals():
 
     st.markdown(f"""
     <div class="petronas-banner fadeup">
-        <h1>Project Totals</h1>
+        <h1>📊 Project Totals</h1>
         <p class="subtitle">Cost summary — Schedule {sched} · Package {pkg} · {curr}</p>
     </div>
     """, unsafe_allow_html=True)
@@ -1551,7 +1535,7 @@ def render_totals():
 
     if not totals["discipline_totals"].empty:
         st.markdown("<div class='pdivider'></div>", unsafe_allow_html=True)
-        section_header("Labour Cost by Discipline")
+        section_header("Labour Cost by Discipline", "🏗️")
         disc = totals["discipline_totals"].copy()
         disc[f"Labour Cost ({curr})"] = disc[f"Labour Cost ({curr})"].apply(lambda x: f"{curr} {x:,.2f}")
         disc["Manhour"] = disc["Manhour"].apply(lambda x: f"{x:,.0f}")
@@ -1559,16 +1543,16 @@ def render_totals():
 
     b1, b2, b3, b4 = st.columns(4, gap="small")
     with b1:
-        if st.button("Back", use_container_width=True):
+        if st.button("⬅️  Back", use_container_width=True):
             st.session_state["page"] = "LOADING"; st.rerun()
     with b2:
-        if st.button("Save Project", use_container_width=True):
-            save_current_project(); st.success("Project saved!"); st.rerun()
+        if st.button("💾  Save Project", use_container_width=True):
+            save_current_project(); st.success("✅ Project saved!"); st.rerun()
     with b3:
-        if st.button("Dashboard", use_container_width=True, type="primary"):
+        if st.button("📈  Dashboard", use_container_width=True, type="primary"):
             st.session_state["page"] = "SUMMARY"; st.rerun()
     with b4:
-        if st.button("Compare", use_container_width=True):
+        if st.button("🔄  Compare", use_container_width=True):
             st.session_state["page"] = "COMPARE"; st.rerun()
 
 # ─────────────────────────────────────────────────
@@ -1595,7 +1579,7 @@ def render_summary():
 
     st.markdown(f"""
     <div class="petronas-banner fadeup">
-        <h1>Project Dashboard</h1>
+        <h1>📈 Project Dashboard</h1>
         <p class="subtitle">{st.session_state['project_title'] or 'Untitled Project'} — {sched} · {pkg} · {curr}</p>
     </div>
     """, unsafe_allow_html=True)
@@ -1630,7 +1614,7 @@ def render_summary():
             {"Total Hours": "sum", f"Labour Cost ({curr})": "sum"}).reset_index()
 
         with ch1:
-            section_header("Labour Cost by Discipline")
+            section_header("Labour Cost by Discipline", "💹")
             fig = px.bar(
                 disc_sum, x=f"Labour Cost ({curr})", y="Discipline",
                 orientation="h", color=f"Labour Cost ({curr})",
@@ -1645,7 +1629,7 @@ def render_summary():
             st.plotly_chart(fig, use_container_width=True)
 
         with ch2:
-            section_header("Manhour Distribution")
+            section_header("Manhour Distribution", "⏱️")
             fig2 = px.pie(
                 disc_sum, values="Total Hours", names="Discipline",
                 color_discrete_sequence=px.colors.sequential.Teal,
@@ -1661,10 +1645,10 @@ def render_summary():
             st.plotly_chart(fig2, use_container_width=True)
 
     st.markdown("<div class='pdivider'></div>", unsafe_allow_html=True)
-    section_header("Project Information")
+    section_header("Project Information", "📋")
     st.dataframe(meta, use_container_width=True, hide_index=True)
 
-    section_header("Cost Summary")
+    section_header("Cost Summary", "💰")
     summary_rows = []
     if not labour.empty:
         disc_sum2 = labour.groupby("Discipline").agg({"Total Hours":"sum", f"Labour Cost ({curr})":"sum"}).reset_index()
@@ -1683,7 +1667,7 @@ def render_summary():
         summary_rows.append({"Description":"C Non-Labour Cost","Manhour":"",
                              f"Total Price ({curr})":f"{non_cost:,.2f}"})
     summary_rows.append({
-        "Description": "Total Raw Bid Price (Base Scope)",
+        "Description": "🏆  Total Raw Bid Price (Base Scope)",
         "Manhour": f"{totals['total_hours']:,.0f}",
         f"Total Price ({curr})": f"{totals['total_exact']:,.2f}"
     })
@@ -1692,18 +1676,18 @@ def render_summary():
     st.markdown("<div class='pdivider'></div>", unsafe_allow_html=True)
     b1, b2, b3, b4 = st.columns(4, gap="small")
     with b1:
-        if st.button("Back", use_container_width=True):
+        if st.button("⬅️  Back", use_container_width=True):
             st.session_state["page"] = "TOTALS"; st.rerun()
     with b2:
-        if st.button("Save Project", use_container_width=True):
-            save_current_project(); st.success("Saved!"); st.rerun()
+        if st.button("💾  Save Project", use_container_width=True):
+            save_current_project(); st.success("✅ Saved!"); st.rerun()
     with b3:
-        if st.button("Compare", use_container_width=True):
+        if st.button("🔄  Compare", use_container_width=True):
             st.session_state["page"] = "COMPARE"; st.rerun()
     with b4:
         excel = to_excel_bytes(meta, totals, labour, third, st.session_state[MONTHLY_LOADING_KEY], curr)
         st.download_button(
-            "Download Excel Report", data=excel,
+            "📥  Excel Report", data=excel,
             file_name=f"MEC_{st.session_state['project_title'] or 'Output'}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True, type="primary"
@@ -1720,7 +1704,7 @@ def render_third_party():
 
     st.markdown(f"""
     <div class="petronas-banner fadeup">
-        <h1>Third Party Services</h1>
+        <h1>💰 Third Party Services</h1>
         <p class="subtitle">Define third-party costs — base labour: {currency} {total_labour:,.2f}</p>
     </div>
     """, unsafe_allow_html=True)
@@ -1766,7 +1750,7 @@ def render_third_party():
                     df.loc[idx, "Percentage"] = 0.0
             with col4:
                 st.markdown("<br>", unsafe_allow_html=True)
-                if st.button("Del", key=f"tp_del_{idx}"):
+                if st.button("🗑️", key=f"tp_del_{idx}"):
                     st.session_state["tp_remove_idx"] = idx; st.rerun()
             st.markdown("</div>", unsafe_allow_html=True)
 
@@ -1774,20 +1758,20 @@ def render_third_party():
 
     col1, col2 = st.columns(2, gap="small")
     with col1:
-        if st.button("Add Item", use_container_width=True):
+        if st.button("➕  Add Item", use_container_width=True):
             new = pd.DataFrame([{"Category":"Third Party Services","Description":"",
                                  "Basis":"Percentage of Labour Cost","Percentage":0.0,
                                  "Fixed Amount":0.0,"Remarks":""}])
             st.session_state[THIRD_PARTY_KEY] = pd.concat([df, new], ignore_index=True); st.rerun()
     with col2:
-        if st.button("Non-Labour", use_container_width=True, type="primary"):
+        if st.button("🏭  Non-Labour →", use_container_width=True, type="primary"):
             st.session_state["page"] = "NON_LABOUR"; st.rerun()
 
     if len(df) > 0:
         costs = calculate_third_party_costs(df, total_labour, currency)
         total = costs[f"Cost ({currency})"].sum()
         st.markdown("<div class='pdivider'></div>", unsafe_allow_html=True)
-        section_header("Calculated Costs")
+        section_header("Calculated Costs", "🧮")
         st.dataframe(costs, use_container_width=True, hide_index=True)
         st.markdown(f"""
         <div class="metric-card">
@@ -1806,7 +1790,7 @@ def render_non_labour():
 
     st.markdown(f"""
     <div class="petronas-banner fadeup">
-        <h1>Non-Labour Costs</h1>
+        <h1>🏭 Non-Labour Costs</h1>
         <p class="subtitle">Define non-labour costs — base labour: {currency} {total_labour:,.2f}</p>
     </div>
     """, unsafe_allow_html=True)
@@ -1850,7 +1834,7 @@ def render_non_labour():
                 df.loc[idx, "Percentage"] = 0.0
         with col4:
             st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("Del", key=f"nl_del_{idx}"):
+            if st.button("🗑️", key=f"nl_del_{idx}"):
                 st.session_state["nl_remove_idx"] = idx; st.rerun()
         st.markdown("<div class='pdivider'></div>", unsafe_allow_html=True)
 
@@ -1858,20 +1842,20 @@ def render_non_labour():
 
     col1, col2 = st.columns(2, gap="small")
     with col1:
-        if st.button("Add Item", use_container_width=True):
+        if st.button("➕  Add Item", use_container_width=True):
             new = pd.DataFrame([{"Category":"Non-Labour Cost","Description":"",
                                  "Basis":"Percentage of Labour Cost","Percentage":0.0,
                                  "Fixed Amount":0.0,"Remarks":""}])
             st.session_state[NON_LABOUR_KEY] = pd.concat([df, new], ignore_index=True); st.rerun()
     with col2:
-        if st.button("Monthly Loading", use_container_width=True, type="primary"):
+        if st.button("📅  Monthly Loading →", use_container_width=True, type="primary"):
             st.session_state["page"] = "LOADING"; st.rerun()
 
     if len(df) > 0:
         costs = calculate_third_party_costs(df, total_labour, currency)
         total = costs[f"Cost ({currency})"].sum()
         st.markdown("<div class='pdivider'></div>", unsafe_allow_html=True)
-        section_header("Calculated Costs")
+        section_header("Calculated Costs", "🧮")
         st.dataframe(costs, use_container_width=True, hide_index=True)
         st.markdown(f"""
         <div class="metric-card">
@@ -1893,7 +1877,7 @@ def render_loading():
 
     st.markdown(f"""
     <div class="petronas-banner fadeup">
-        <h1>Monthly Loading</h1>
+        <h1>📅 Monthly Loading</h1>
         <p class="subtitle">Distribute costs across project duration — {currency} {total_labour:,.2f} base labour</p>
     </div>
     """, unsafe_allow_html=True)
@@ -1923,7 +1907,7 @@ def render_loading():
             df["Weightage Distribution"] = 100.0 / num
             st.session_state[MONTHLY_LOADING_KEY] = df; st.rerun()
     with col3:
-        st.info(f"Total weightage: {df['Weightage Distribution'].sum():.1f}%")
+        st.info(f"⚡ Total weightage: {df['Weightage Distribution'].sum():.1f}%")
 
     st.markdown("<div class='pdivider'></div>", unsafe_allow_html=True)
 
@@ -1952,7 +1936,7 @@ def render_loading():
             st.markdown(f"<div style='padding:0.5rem 0'>{currency} {cost:,.0f}</div>", unsafe_allow_html=True)
 
     if abs(df["Weightage Distribution"].sum() - 100) > 0.01:
-        st.warning(f"Weightage totals {df['Weightage Distribution'].sum():.1f}% — should be 100%")
+        st.warning(f"⚠️ Weightage totals {df['Weightage Distribution'].sum():.1f}% — should be 100%")
 
     st.session_state[MONTHLY_LOADING_KEY] = df
 
@@ -1977,13 +1961,13 @@ def render_loading():
 
     b1, b2, b3 = st.columns(3, gap="small")
     with b1:
-        if st.button("Back", use_container_width=True):
+        if st.button("⬅️  Back", use_container_width=True):
             st.session_state["page"] = "NON_LABOUR"; st.rerun()
     with b2:
-        if st.button("Totals", use_container_width=True, type="primary"):
+        if st.button("📊  Totals →", use_container_width=True, type="primary"):
             st.session_state["page"] = "TOTALS"; st.rerun()
     with b3:
-        if st.button("Reset", use_container_width=True):
+        if st.button("↺  Reset", use_container_width=True):
             months = [f"Month {i+1:02d}" for i in range(12)]
             st.session_state[MONTHLY_LOADING_KEY] = pd.DataFrame({
                 "Month": months, "Loading Factor (%)": [100.0]*12,
@@ -1995,7 +1979,7 @@ def render_loading():
 def render_compare():
     st.markdown(f"""
     <div class="petronas-banner fadeup">
-        <h1>Project Comparison</h1>
+        <h1>🔄 Project Comparison</h1>
         <p class="subtitle">Compare saved project scenarios side-by-side</p>
     </div>
     """, unsafe_allow_html=True)
@@ -2003,16 +1987,16 @@ def render_compare():
     saved = st.session_state.get(SAVED_PROJECTS_KEY, [])
     if not saved:
         st.info("No saved projects yet. Save a project from the Totals or Dashboard page.")
-        if st.button("Back to Dashboard"):
+        if st.button("⬅️  Back to Dashboard"):
             st.session_state["page"] = "SUMMARY"; st.rerun()
         return
 
     display = [f"{p['name']}  ({p['type_of_schedule']}, {p['type_of_package']}, {p['currency']})" for p in saved]
     col1, col2 = st.columns(2, gap="large")
     with col1:
-        i1 = st.selectbox("First Project",  range(len(saved)), format_func=lambda i: display[i], key="c1")
+        i1 = st.selectbox("📂 First Project",  range(len(saved)), format_func=lambda i: display[i], key="c1")
     with col2:
-        i2 = st.selectbox("Second Project", range(len(saved)), format_func=lambda i: display[i],
+        i2 = st.selectbox("📂 Second Project", range(len(saved)), format_func=lambda i: display[i],
                          index=min(1, len(saved)-1), key="c2")
 
     if i1 == i2:
@@ -2022,7 +2006,7 @@ def render_compare():
         comp   = compare_projects(p1, p2)
 
         st.markdown("<div class='pdivider'></div>", unsafe_allow_html=True)
-        section_header("Delta Analysis")
+        section_header("Delta Analysis", "📐")
 
         m1, m2 = st.columns(2, gap="medium")
         with m1:
@@ -2062,7 +2046,7 @@ def render_compare():
         st.dataframe(compare_df, use_container_width=True, hide_index=True)
 
     st.markdown("<div class='pdivider'></div>", unsafe_allow_html=True)
-    section_header("Saved Projects")
+    section_header("Saved Projects", "🗄️")
     for i, p in enumerate(saved):
         cols = st.columns([4, 2, 2, 1], gap="small")
         with cols[0]:
@@ -2076,23 +2060,23 @@ def render_compare():
             ts = datetime.fromisoformat(p["timestamp"]).strftime("%Y-%m-%d %H:%M")
             st.markdown(f"<div style='font-size:0.78rem;color:var(--text-muted);padding-top:0.3rem'>{ts}</div>", unsafe_allow_html=True)
         with cols[3]:
-            if st.button("Del", key=f"del_{i}"):
+            if st.button("🗑️", key=f"del_{i}"):
                 saved.pop(i)
                 st.session_state[SAVED_PROJECTS_KEY] = saved; st.rerun()
 
     col1, col2 = st.columns(2, gap="small")
     with col1:
-        if st.button("Clear All", use_container_width=True):
+        if st.button("🗑️  Clear All", use_container_width=True):
             st.session_state[SAVED_PROJECTS_KEY] = []; st.rerun()
     with col2:
-        if st.button("Back to Dashboard", use_container_width=True, type="primary"):
+        if st.button("⬅️  Back to Dashboard", use_container_width=True, type="primary"):
             st.session_state["page"] = "SUMMARY"; st.rerun()
 
 # ─────────────────────────────────────────────────
 # App header
 st.markdown(f"""
 <div style="display:flex;align-items:center;gap:1rem;margin-bottom:0.5rem">
-    <div style="width:32px;height:32px;background:linear-gradient(135deg,{PETRONAS['teal']},{PETRONAS['teal_dark']});border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:0.7rem;font-weight:700;color:#fff;letter-spacing:0.03em;flex-shrink:0">MEC</div>
+    <div style="font-size:1.5rem">⛽</div>
     <div>
         <span style="font-weight:700;font-size:1.1rem;color:var(--teal);letter-spacing:-0.02em">MEC TOOL</span>
         <span style="color:var(--text-muted);font-size:0.85rem;margin-left:0.75rem">Major Engineering Contract · PETRONAS Upstream CE</span>
