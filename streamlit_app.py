@@ -894,6 +894,13 @@ def initialize_default_grids():
 
     _mdr_raw = st.session_state.get("mdr_df", pd.DataFrame())
     mdr_df = _mdr_raw[0] if isinstance(_mdr_raw, tuple) else _mdr_raw
+    
+    num_months = N_MONTHS
+    if not mdr_df.empty:
+        month_cols = [c for c in mdr_df.columns if str(c).startswith('Month ')]
+        if month_cols:
+            num_months = len(month_cols)
+            
     rows = []
     if not mdr_df.empty and all(c in mdr_df.columns for c in ["DISCIPLINE", "PERSONNEL", "Total (Hours)"]):
         for _, row in mdr_df.iterrows():
@@ -901,13 +908,15 @@ def initialize_default_grids():
             pers = str(row["PERSONNEL"]).strip()
             try: total_hrs = float(row["Total (Hours)"])
             except: total_hrs = 0.0
+            weightage = total_hrs / HOURS_PER_MONTH
             rows.append({
                 "Swatch": DISCIPLINE_SWATCH.get(disc, "⬜"),
                 "Discipline": disc, "Personnel": pers,
                 "Category": categories[0] if categories else "",
                 "Type of Unit Rate": "Normalise",
                 "Total Hours": total_hrs,
-                "Weightage (FTE)": total_hrs / HOURS_PER_MONTH
+                "Weightage (FTE)": weightage,
+                "Weightage / Month": weightage / num_months if num_months else 0.0
             })
     else:
         for disc, count in DISCIPLINE_ROW_COUNTS.items():
@@ -919,7 +928,8 @@ def initialize_default_grids():
                     "Discipline": disc, "Personnel": pers,
                     "Category": categories[0] if categories else "",
                     "Type of Unit Rate": "Normalise",
-                    "Total Hours": 0.0, "Weightage (FTE)": 0.0
+                    "Total Hours": 0.0, "Weightage (FTE)": 0.0,
+                    "Weightage / Month": 0.0
                 })
     st.session_state[GRID_KEY] = pd.DataFrame(rows)
 
@@ -1252,7 +1262,7 @@ def get_rate(mec_df, personnel, category, unit_type, schedule, package):
 def calculate_labour_costs(grid_df, currency, type_of_schedule, type_of_package):
     out_cols = ["Discipline", "Personnel", "Category", "Type of Unit Rate",
                 f"Unit Rate ({currency})", "Total Hours", "Weightage (FTE)",
-                f"Labour Cost ({currency})"]
+                "Weightage / Month", f"Labour Cost ({currency})"]
     if grid_df.empty: return pd.DataFrame(columns=out_cols)
     required = ["Personnel", "Category", "Type of Unit Rate", "Total Hours", "Weightage (FTE)"]
     if not all(c in grid_df.columns for c in required):
@@ -1266,6 +1276,8 @@ def calculate_labour_costs(grid_df, currency, type_of_schedule, type_of_package)
         cache[key] = val
         return val
     df = grid_df.copy()
+    if "Weightage / Month" not in df.columns:
+        df["Weightage / Month"] = 0.0
     df["Total Hours"]     = pd.to_numeric(df["Total Hours"],     errors="coerce").fillna(0).astype(float)
     df["Weightage (FTE)"] = pd.to_numeric(df["Weightage (FTE)"], errors="coerce").fillna(0).astype(float)
     df[f"Unit Rate ({currency})"]    = df.apply(rate_for, axis=1).astype(float)
@@ -1405,7 +1417,8 @@ def to_excel_bytes(main_meta, totals, labour_df, third_party_df, monthly_df, cur
         ws[f"{col}{row}"].fill = PatternFill("solid", fgColor="00A19C")
     row += 2
     total_weightage = labour_df["Weightage (FTE)"].sum() if not labour_df.empty else 0
-    avg_weight = total_weightage / N_MONTHS if N_MONTHS else 0
+    num_months_excel = len(monthly_df) if not monthly_df.empty else N_MONTHS
+    avg_weight = total_weightage / num_months_excel if num_months_excel else 0
     ws[f"B{row}"] = f"Average Weightage per Month: {avg_weight:.2f}"
     row += 1
     ws[f"B{row}"] = f"{currency}/manhour: {currency} {totals['total_exact']/totals['total_hours'] if totals['total_hours'] else 0:,.2f}"
@@ -1576,6 +1589,8 @@ def render_table():
     if df.empty:
         initialize_default_grids()
         df = st.session_state[GRID_KEY].copy()
+    if not df.empty and "Weightage / Month" not in df.columns:
+        df["Weightage / Month"] = 0.0
     df["Category"] = df["Category"].where(df["Category"].isin(cats), cats[0] if cats else "")
     df["Swatch"]   = df["Discipline"].map(DISCIPLINE_SWATCH).fillna("⬜")
     st.session_state[GRID_KEY] = df
@@ -1615,6 +1630,7 @@ def render_table():
                         cellEditorParams={"values": RATE_TYPES or UNIT_TYPES})
     gb.configure_column("Total Hours",      type=["numericColumn"], width=150, editable=False)
     gb.configure_column("Weightage (FTE)",  type=["numericColumn"], width=150, editable=False)
+    gb.configure_column("Weightage / Month",type=["numericColumn"], width=150, editable=False)
 
     disc_bg  = {k: f"#{v}" for k, v in DISCIPLINE_COLORS.items()}
     row_style = JsCode(f"""
@@ -1640,7 +1656,7 @@ def render_table():
                 "Swatch": "⬜", "Discipline": list(DISCIPLINE_ROW_COUNTS.keys())[0],
                 "Personnel": PERSONNEL_LIST[0] if PERSONNEL_LIST else "",
                 "Category": cats[0] if cats else "", "Type of Unit Rate": "Normalise",
-                "Total Hours": 0.0, "Weightage (FTE)": 0.0
+                "Total Hours": 0.0, "Weightage (FTE)": 0.0, "Weightage / Month": 0.0
             }
             st.session_state[GRID_KEY] = df; st.rerun()
     with b2:
@@ -1773,7 +1789,9 @@ def render_summary():
 
     # KPI row
     total_weightage = labour["Weightage (FTE)"].sum() if not labour.empty else 0
-    avg_weight      = total_weightage / N_MONTHS if N_MONTHS else 0
+    monthly_df = st.session_state.get(MONTHLY_LOADING_KEY, pd.DataFrame())
+    num_dash_months = len(monthly_df) if not monthly_df.empty else N_MONTHS
+    avg_weight      = total_weightage / num_dash_months if num_dash_months else 0
     rate_per_mh     = totals["total_exact"] / totals["total_hours"] if totals["total_hours"] else 0
 
     k1, k2, k3, k4 = st.columns(4, gap="medium")
