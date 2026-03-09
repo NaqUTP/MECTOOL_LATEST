@@ -1,5 +1,6 @@
 # streamlit_app.py
-# MEC TOOL – final version with MDR.csv integration, average weightage, and full page implementations
+# MEC TOOL – final version with robust error handling, MDR.csv integration,
+# average weightage, and full page implementations
 # Author: Ahmad Naquib Syahmee Masror
 # Date: 2026‑03‑09
 
@@ -265,12 +266,26 @@ NBSP = "\xa0"
 _num = re.compile(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?")
 
 def _to_float_safe(val):
-    if pd.isna(val):
+    """Robust conversion to float – returns 0.0 on any failure."""
+    try:
+        if val is None:
+            return 0.0
+        # If already a number (and not NaN), return it
+        if isinstance(val, (int, float)):
+            return 0.0 if pd.isna(val) else float(val)
+        # Convert to string and clean
+        s = str(val).strip()
+        if not s:
+            return 0.0
+        # Remove common currency symbols and thousand separators
+        s = re.sub(r"[$,€£\s]", "", s)
+        # Replace any non-numeric characters (except . and -) with space
+        s = re.sub(r"[^\d.-]", " ", s)
+        # Extract the first number
+        m = _num.search(s)
+        return float(m.group()) if m else 0.0
+    except Exception:
         return 0.0
-    s = str(val).replace(",", "").replace(NBSP, " ").strip()
-    s = re.sub(r"(usd|myr|rm|\$|,)", " ", s, flags=re.I)
-    m = _num.search(s)
-    return float(m.group(0)) if m else 0.0
 
 def _canon(s: str) -> str:
     return re.sub(r"\s+", " ", str(s or "").replace(NBSP, " ").strip().lower())
@@ -384,7 +399,7 @@ def reset_all():
     st.session_state[NON_LABOUR_KEY] = pd.DataFrame([{"Category": "Non-Labour Cost", "Description": "",
                                                        "Basis": "Percentage of Labour Cost", "Percentage": 0.0,
                                                        "Fixed Amount": 0.0, "Remarks": ""}])
-    months = [f"Month {i+1:02d}" for i in range(12)]  # keep 12 for loading, but note project duration is 6 months
+    months = [f"Month {i+1:02d}" for i in range(12)]
     st.session_state[MONTHLY_LOADING_KEY] = pd.DataFrame({
         "Month": months,
         "Loading Factor (%)": [100.0]*12,
@@ -398,6 +413,7 @@ def reset_all():
 # CSV loaders
 @st.cache_data(show_spinner=False, ttl=600)
 def load_mec_csv(file_obj):
+    """Load MEC.csv with your exact columns."""
     try:
         file_obj.seek(0)
         df = pd.read_csv(file_obj)
@@ -405,25 +421,28 @@ def load_mec_csv(file_obj):
         rename = {}
         for col in df.columns:
             low = col.lower().strip()
-            if 'project' in low and 'description' not in low:
+            if low == 'project':
                 rename[col] = 'PROJECT'
-            elif 'project description' in low:
+            elif low == 'project description':
                 rename[col] = 'PROJECT DESCRIPTION'
-            elif 'schedule' in low and 'description' not in low:
+            elif low == 'schedules':
                 rename[col] = 'SCHEDULES'
-            elif 'schedule description' in low:
+            elif low == 'schedule description':
                 rename[col] = 'SCHEDULES DESCRIPTION'
-            elif 'category' in low:
+            elif low == 'category':
                 rename[col] = 'CATEGORY'
-            elif 'personnel' in low:
+            elif low == 'personnel':
                 rename[col] = 'PERSONNEL'
-            elif 'type of rate' in low:
+            elif low == 'type of rate':
                 rename[col] = 'TYPE OF RATE'
-            elif 'unit rate' in low:
+            elif low == 'unit rate':
                 rename[col] = 'UNIT RATE'
-            elif 'package' in low:
-                rename[col] = 'PACKAGE'
         df = df.rename(columns=rename)
+        # Ensure all required columns exist
+        for req in ['PROJECT', 'PROJECT DESCRIPTION', 'SCHEDULES', 'SCHEDULES DESCRIPTION',
+                    'CATEGORY', 'PERSONNEL', 'TYPE OF RATE', 'UNIT RATE']:
+            if req not in df.columns:
+                df[req] = None
         return df
     except Exception as e:
         st.warning(f"Error reading MEC.csv: {e}")
@@ -437,7 +456,6 @@ def load_mdr_csv(file_obj):
         df = pd.read_csv(file_obj)
         df.columns = [str(col).strip() for col in df.columns]
 
-        # Expected columns: DISCIPLINE, PERSONNEL, Month 1, Month 2, ..., Month 6, Total (Hours)
         if "Total (Hours)" not in df.columns:
             st.warning("MDR.csv must contain a 'Total (Hours)' column.")
             return pd.DataFrame()
@@ -605,40 +623,53 @@ def get_rate(mec_df: pd.DataFrame, personnel: str, category: str, unit_type: str
              schedule: str, package: str) -> float:
     if mec_df.empty:
         return 0.0
-    matches = _relaxed_match(mec_df, personnel, category, schedule, unit_type, package)
-    if not matches.empty and "UNIT RATE" in matches.columns:
-        val = get_col(matches, "UNIT RATE").iloc[0]
+    try:
+        matches = _relaxed_match(mec_df, personnel, category, schedule, unit_type, package)
+        if matches.empty:
+            return 0.0
+        if "UNIT RATE" not in matches.columns:
+            return 0.0
+        val = matches["UNIT RATE"].iat[0]
         return _to_float_safe(val)
-    return 0.0
+    except Exception:
+        return 0.0
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Calculations (no KPBI)
 def calculate_labour_costs(grid_df: pd.DataFrame, currency: str, type_of_schedule: str,
                            type_of_package: str) -> pd.DataFrame:
+    out_cols = ["Discipline", "Personnel", "Category", "Type of Unit Rate",
+                f"Unit Rate ({currency})", "Total Hours", "Weightage (FTE)",
+                f"Labour Cost ({currency})"]
     if grid_df.empty:
-        return pd.DataFrame(columns=["Discipline", "Personnel", "Category", "Type of Unit Rate",
-                                      f"Unit Rate ({currency})", "Total Hours", "Weightage (FTE)",
-                                      f"Labour Cost ({currency})"])
+        return pd.DataFrame(columns=out_cols)
+
+    required = ["Personnel", "Category", "Type of Unit Rate", "Total Hours", "Weightage (FTE)"]
+    if not all(col in grid_df.columns for col in required):
+        missing = [col for col in required if col not in grid_df.columns]
+        st.error(f"Missing columns in personnel table: {missing}")
+        return pd.DataFrame(columns=out_cols)
+
     cache = {}
     def rate_for(row):
-        key = (row["Personnel"], row["Category"], row["Type of Unit Rate"],
-               type_of_schedule, type_of_package)
-        if key in cache:
-            return cache[key]
-        val = get_rate(mec_df, key[0], key[1], key[2], key[3], key[4])
-        cache[key] = val
-        return val
+        try:
+            key = (row["Personnel"], row["Category"], row["Type of Unit Rate"],
+                   type_of_schedule, type_of_package)
+            if key in cache:
+                return cache[key]
+            val = get_rate(mec_df, key[0], key[1], key[2], key[3], key[4])
+            cache[key] = val
+            return val
+        except Exception:
+            return 0.0
 
     df = grid_df.copy()
-    # Ensure numeric
     df["Total Hours"] = pd.to_numeric(df["Total Hours"], errors="coerce").fillna(0).astype(float)
     df["Weightage (FTE)"] = pd.to_numeric(df["Weightage (FTE)"], errors="coerce").fillna(0).astype(float)
 
     df[f"Unit Rate ({currency})"] = df.apply(rate_for, axis=1).astype(float)
     df[f"Labour Cost ({currency})"] = df["Total Hours"] * df[f"Unit Rate ({currency})"]
-    return df[["Discipline", "Personnel", "Category", "Type of Unit Rate",
-               f"Unit Rate ({currency})", "Total Hours", "Weightage (FTE)",
-               f"Labour Cost ({currency})"]]
+    return df[out_cols]
 
 def calculate_third_party_costs(df: pd.DataFrame, total_labour: float, currency: str) -> pd.DataFrame:
     if df.empty:
@@ -937,8 +968,8 @@ def render_table():
         resp = AgGrid(df, gridOptions=gb.build(), height=500, update_on="value_changed",
                       allow_unsafe_jscode=True, theme="streamlit")
         st.session_state[GRID_KEY] = pd.DataFrame(resp["data"])
-    except:
-        st.warning("Grid update failed")
+    except Exception as e:
+        st.warning(f"Grid update failed: {e}")
 
     b1,b2,b3 = st.columns(3)
     with b1:
@@ -1088,8 +1119,6 @@ def render_summary():
             st.session_state["page"] = "COMPARE"
             st.rerun()
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Third Party page (full implementation)
 def render_third_party():
     st.header("💰 Third Party Services")
     currency = currency_for(st.session_state["type_of_schedule"])
@@ -1176,8 +1205,6 @@ def render_third_party():
         st.dataframe(costs, use_container_width=True)
         st.markdown(f"<h3 style='color:{BRAND1}'>Total: {currency} {total:,.2f}</h3>", unsafe_allow_html=True)
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Non-Labour page (full implementation)
 def render_non_labour():
     st.header("🏭 Non-Labour Costs")
     currency = currency_for(st.session_state["type_of_schedule"])
@@ -1261,8 +1288,6 @@ def render_non_labour():
         st.dataframe(costs, use_container_width=True)
         st.markdown(f"<h3 style='color:{BRAND1}'>Total: {currency} {total:,.2f}</h3>", unsafe_allow_html=True)
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Monthly Loading page (full implementation)
 def render_loading():
     st.header("📅 Monthly Loading")
     currency = currency_for(st.session_state["type_of_schedule"])
@@ -1357,8 +1382,6 @@ def render_loading():
             st.session_state[MONTHLY_LOADING_KEY] = default
             st.rerun()
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Compare Projects page (full implementation)
 def render_compare():
     st.header("Project Comparison")
 
