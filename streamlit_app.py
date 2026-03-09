@@ -267,17 +267,21 @@ def inject_css(dark: bool):
     section[data-testid="stSidebar"] .stFileUploader label {{
         color: var(--text) !important;
     }}
-    /* Sidebar file uploader dropzone text */
+    /* Sidebar file uploader dropzone — dropzone box always has a light bg, force dark readable text */
+    section[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"],
     section[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] * {{
-        color: var(--text) !important;
+        color: #1a2535 !important;
     }}
-    section[data-testid="stSidebar"] .stFileUploader [data-testid="stFileUploaderDropzoneInstructions"] span {{
-        color: var(--text) !important;
+    section[data-testid="stSidebar"] .stFileUploader [data-testid="stFileUploaderDropzoneInstructions"] span,
+    section[data-testid="stSidebar"] .stFileUploader [data-testid="stFileUploaderDropzoneInstructions"] small,
+    section[data-testid="stSidebar"] .stFileUploader [data-testid="stFileUploaderDropzoneInstructions"] p {{
+        color: #1a2535 !important;
     }}
-    section[data-testid="stSidebar"] .stFileUploader small,
-    section[data-testid="stSidebar"] .stFileUploader span,
-    section[data-testid="stSidebar"] .stFileUploader p {{
-        color: var(--text) !important;
+    /* Browse files button inside sidebar dropzone */
+    section[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] button,
+    section[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] button span {{
+        color: #1a2535 !important;
+        border-color: #1a2535 !important;
     }}
 
     /* ── Main content ── */
@@ -1381,8 +1385,23 @@ def calculate_labour_costs(grid_df, currency, type_of_schedule, type_of_package)
     df[f"Labour Cost ({currency})"]  = df["Total Hours"] * df[f"Unit Rate ({currency})"]
     return df[out_cols]
 
+def parse_lumpsum_details(raw):
+    """Parse a JSON list of {detail, amount} dicts from a stored cell value."""
+    if not raw:
+        return [{"detail": "", "amount": 0.0}]
+    if isinstance(raw, list):
+        return raw
+    try:
+        parsed = json.loads(str(raw))
+        if isinstance(parsed, list) and all(isinstance(it, dict) for it in parsed):
+            return parsed
+    except Exception:
+        pass
+    # Legacy plain-string — migrate to list format
+    return [{"detail": str(raw), "amount": 0.0}]
+
 def calculate_third_party_costs(df, total_labour, currency):
-    if df.empty: return pd.DataFrame(columns=["Category", "Description", "Basis", f"Cost ({currency})", "Remarks"])
+    if df.empty: return pd.DataFrame(columns=["Category", "Description", "Details", "Basis", f"Cost ({currency})"])
     result = df.copy()
     result[f"Cost ({currency})"] = 0.0
     for idx, row in result.iterrows():
@@ -1391,7 +1410,22 @@ def calculate_third_party_costs(df, total_labour, currency):
             result.loc[idx, f"Cost ({currency})"] = total_labour * (float(row.get("Percentage", 0)) / 100.0)
         else:
             result.loc[idx, f"Cost ({currency})"] = float(row.get("Fixed Amount", 0))
-    return result[["Category", "Description", "Basis", f"Cost ({currency})", "Remarks"]]
+
+    def fmt_details(row):
+        raw = row.get("LumpSum Details", "")
+        if not raw:
+            return ""
+        try:
+            items = json.loads(str(raw))
+            if isinstance(items, list):
+                parts = [f"{it.get('detail','')}" for it in items if it.get("detail") or it.get("amount")]
+                return "; ".join(parts) if parts else ""
+        except Exception:
+            pass
+        return str(raw)
+
+    result["Details"] = result.apply(fmt_details, axis=1)
+    return result[["Category", "Description", "Details", "Basis", f"Cost ({currency})"]]
 
 def apply_monthly_loading(labour_df, third_party_df, monthly_df, currency):
     if monthly_df.empty:
@@ -1473,21 +1507,31 @@ def to_excel_bytes(main_meta, totals, labour_df, third_party_df, monthly_df, cur
     wb = Workbook()
     ws = wb.active
     ws.title = "Summary"
+
+    thin = Side(style="thin", color="000000")
+    border_all = Border(left=thin, right=thin, top=thin, bottom=thin)
+
     ws.merge_cells("B2:I3")
     ws["B2"] = "MAJOR ENGINEERING CONTRACT (MEC) TOOL FOR CE UPSTREAM"
     ws["B2"].font  = Font(bold=True, size=14, color="FFFFFF")
     ws["B2"].fill  = PatternFill("solid", fgColor="00A19C")
     ws["B2"].alignment = Alignment(horizontal="center", vertical="center")
+    ws["B2"].border = border_all
     row = 5
     for k, v in main_meta.iloc[0].items():
         ws[f"B{row}"] = k
         ws[f"C{row}"] = v
+        ws[f"B{row}"].border = border_all
+        ws[f"C{row}"].border = border_all
+        ws[f"B{row}"].font = Font(bold=True)
         row += 1
     row += 2
     for lbl, col in [("Description","B"),("Manhour","C"),(f"Total Price ({currency})","D")]:
         ws[f"{col}{row}"] = lbl
         ws[f"{col}{row}"].font = Font(bold=True)
-        ws[f"{col}{row}"].fill = PatternFill("solid", fgColor="E6F7F7")
+        ws[f"{col}{row}"].fill = PatternFill("solid", fgColor="00A19C")
+        ws[f"{col}{row}"].font = Font(bold=True, color="FFFFFF")
+        ws[f"{col}{row}"].border = border_all
     row += 1
     if not labour_df.empty:
         disc_sum = labour_df.groupby("Discipline").agg({"Total Hours":"sum",f"Labour Cost ({currency})":"sum"}).reset_index()
@@ -1495,30 +1539,46 @@ def to_excel_bytes(main_meta, totals, labour_df, third_party_df, monthly_df, cur
             ws[f"B{row}"] = drow["Discipline"]
             ws[f"C{row}"] = drow["Total Hours"]
             ws[f"D{row}"] = drow[f"Labour Cost ({currency})"]
+            for col in ["B", "C", "D"]:
+                ws[f"{col}{row}"].border = border_all
             row += 1
     ws[f"B{row}"] = "B Third Party Services Cost(*)"
     ws[f"D{row}"] = totals["total_third_party"]
+    for col in ["B", "C", "D"]:
+        ws[f"{col}{row}"].border = border_all
     row += 1
     non_labour_df = st.session_state.get(NON_LABOUR_KEY, pd.DataFrame())
     if not non_labour_df.empty:
         non_cost = calculate_third_party_costs(non_labour_df, totals["total_labour_exact"], currency)[f"Cost ({currency})"].sum()
         ws[f"B{row}"] = "C Non-Labour Cost"
         ws[f"D{row}"] = non_cost
+        for col in ["B", "C", "D"]:
+            ws[f"{col}{row}"].border = border_all
         row += 1
     row += 1
     ws[f"B{row}"] = "Total Raw Bid Price (Base Scope)"
     ws[f"C{row}"] = totals["total_hours"]
     ws[f"D{row}"] = totals["total_exact"]
     for col in ["B","C","D"]:
-        ws[f"{col}{row}"].font = Font(bold=True)
+        ws[f"{col}{row}"].font = Font(bold=True, color="FFFFFF")
         ws[f"{col}{row}"].fill = PatternFill("solid", fgColor="00A19C")
+        ws[f"{col}{row}"].border = border_all
     row += 2
     total_weightage = labour_df["Weightage (FTE)"].sum() if not labour_df.empty else 0
     num_months_excel = len(monthly_df) if not monthly_df.empty else N_MONTHS
     avg_weight = total_weightage / num_months_excel if num_months_excel else 0
-    ws[f"B{row}"] = f"Average Weightage per Month: {avg_weight:.2f}"
+    ws[f"B{row}"] = "Average Weightage per Month"
+    ws[f"C{row}"] = round(avg_weight, 2)
+    ws[f"B{row}"].font = Font(bold=True)
+    ws[f"B{row}"].border = border_all
+    ws[f"C{row}"].border = border_all
     row += 1
-    ws[f"B{row}"] = f"{currency}/manhour: {currency} {totals['total_exact']/totals['total_hours'] if totals['total_hours'] else 0:,.2f}"
+    rate_per_mh = totals['total_exact'] / totals['total_hours'] if totals['total_hours'] else 0
+    ws[f"B{row}"] = f"{currency}/Manhour"
+    ws[f"C{row}"] = round(rate_per_mh, 2)
+    ws[f"B{row}"].font = Font(bold=True)
+    ws[f"B{row}"].border = border_all
+    ws[f"C{row}"].border = border_all
     if not labour_df.empty:
         ws2 = wb.create_sheet("Labour Details")
         for c, col in enumerate(labour_df.columns, 1):
@@ -1527,6 +1587,17 @@ def to_excel_bytes(main_meta, totals, labour_df, third_party_df, monthly_df, cur
         for r, row_data in labour_df.iterrows():
             for c, val in enumerate(row_data, 1):
                 ws2.cell(r+2, c, val)
+    # Set explicit column widths so cells aren't smashed
+    ws.column_dimensions["A"].width = 4
+    ws.column_dimensions["B"].width = 42
+    ws.column_dimensions["C"].width = 16
+    ws.column_dimensions["D"].width = 24
+    ws.column_dimensions["E"].width = 4
+    if "Labour Details" in wb.sheetnames:
+        ws2 = wb["Labour Details"]
+        for i, col in enumerate(labour_df.columns, 1):
+            max_len = max(len(str(col)), labour_df[col].astype(str).map(len).max() if not labour_df.empty else 0)
+            ws2.column_dimensions[chr(64 + i)].width = min(max_len + 4, 40)
     out = io.BytesIO()
     wb.save(out)
     return out.getvalue()
@@ -1655,16 +1726,13 @@ def render_main():
         </div>""", unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
-    b1, b2, b3 = st.columns(3, gap="small")
+    b1, b2 = st.columns([1, 1], gap="small")
     with b1:
-        if st.button("Go to Personnel →", use_container_width=True, type="primary"):
-            st.session_state["page"] = "TABLE"; st.rerun()
-    with b2:
         if st.button("Reset Grid", use_container_width=True):
             reset_grid(); st.rerun()
-    with b3:
-        if st.button("Third Party →", use_container_width=True):
-            st.session_state["page"] = "THIRD_PARTY"; st.rerun()
+    with b2:
+        if st.button("Next →", use_container_width=True, type="primary"):
+            st.session_state["page"] = "TABLE"; st.rerun()
 
 # ─────────────────────────────────────────────────
 # Page: TABLE (no emojis)
@@ -1695,19 +1763,23 @@ def render_table():
 
     # Bulk actions
     section_header("Bulk Actions", "⚡")
-    bc1, bc2, bc3, bc4 = st.columns([2,1,2,1], gap="small")
-    with bc1:
-        st.selectbox("Category for ALL rows", cats, key="bulk_cat")
-    with bc2:
-        if st.button("Apply", use_container_width=True, key="apply_cat"):
-            df["Category"] = st.session_state["bulk_cat"]
-            st.session_state[GRID_KEY] = df; st.rerun()
-    with bc3:
-        st.selectbox("Rate Type for ALL rows", RATE_TYPES or UNIT_TYPES, key="bulk_type")
-    with bc4:
-        if st.button("Apply", use_container_width=True, key="apply_type"):
-            df["Type of Unit Rate"] = st.session_state["bulk_type"]
-            st.session_state[GRID_KEY] = df; st.rerun()
+    _bleft, _bgap, _bright = st.columns([3, 0.3, 3])
+    with _bleft:
+        bc1, bc2 = st.columns([3, 1], gap="small", vertical_alignment="bottom")
+        with bc1:
+            st.selectbox("Category for ALL rows", cats, key="bulk_cat")
+        with bc2:
+            if st.button("Apply", use_container_width=True, key="apply_cat"):
+                df["Category"] = st.session_state["bulk_cat"]
+                st.session_state[GRID_KEY] = df; st.rerun()
+    with _bright:
+        bc3, bc4 = st.columns([3, 1], gap="small", vertical_alignment="bottom")
+        with bc3:
+            st.selectbox("Rate Type for ALL rows", RATE_TYPES or UNIT_TYPES, key="bulk_type")
+        with bc4:
+            if st.button("Apply", use_container_width=True, key="apply_type"):
+                df["Type of Unit Rate"] = st.session_state["bulk_type"]
+                st.session_state[GRID_KEY] = df; st.rerun()
 
     st.markdown("<div class='pdivider'></div>", unsafe_allow_html=True)
     section_header("Personnel Grid", "📋")
@@ -1737,18 +1809,25 @@ def render_table():
             return params.data ? {{backgroundColor: map[params.data.Discipline] || null}} : null;
         }}
     """)
-    gb.configure_grid_options(getRowStyle=row_style)
+    gb.configure_grid_options(
+        getRowStyle=row_style,
+        onGridSizeChanged=JsCode("function(params){params.api.sizeColumnsToFit();}"),
+        onFirstDataRendered=JsCode("function(params){params.api.sizeColumnsToFit();}"),
+    )
 
     try:
         ag_theme = "alpine-dark" if st.session_state.get("dark_mode", False) else "alpine"
         resp = AgGrid(df, gridOptions=gb.build(), height=480, update_on="value_changed",
-                      allow_unsafe_jscode=True, theme=ag_theme)
+                      allow_unsafe_jscode=True, theme=ag_theme, fit_columns_on_grid_load=True)
         st.session_state[GRID_KEY] = pd.DataFrame(resp["data"])
     except Exception as e:
         st.warning(f"Grid error: {e}")
 
-    b1, b2, b3 = st.columns(3, gap="small")
+    b1, b2, b3, b4 = st.columns(4, gap="small")
     with b1:
+        if st.button("← Back", use_container_width=True):
+            st.session_state["page"] = "MAIN"; st.rerun()
+    with b2:
         if st.button("Add Row", use_container_width=True):
             df = st.session_state[GRID_KEY].copy()
             df.loc[len(df)] = {
@@ -1758,12 +1837,12 @@ def render_table():
                 "Total Hours": 0.0, "Weightage (FTE)": 0.0, "Weightage / Month": 0.0
             }
             st.session_state[GRID_KEY] = df; st.rerun()
-    with b2:
+    with b3:
         if st.button("Reset", use_container_width=True):
             reset_grid(); st.rerun()
-    with b3:
+    with b4:
         if st.button("Next →", use_container_width=True, type="primary"):
-            st.session_state["page"] = "LOADING"; st.rerun()
+            st.session_state["page"] = "THIRD_PARTY"; st.rerun()
 
     # Live total
     labour = calculate_labour_costs(st.session_state[GRID_KEY], curr, sched, pkg)
@@ -2017,11 +2096,27 @@ def render_third_party():
     if df.empty:
         df = pd.DataFrame([{"Category":"Third Party Services","Description":"",
                             "Basis":"Percentage of Labour Cost","Percentage":0.0,
-                            "Fixed Amount":0.0,"Remarks":""}])
+                            "Fixed Amount":0.0,"Remarks":"","LumpSum Details":""}])
         st.session_state[THIRD_PARTY_KEY] = df
+    # Ensure LumpSum Details column exists
+    if "LumpSum Details" not in df.columns:
+        df["LumpSum Details"] = ""
 
     df["Basis"] = df["Basis"].replace({"% of Labour Cost":"Percentage of Labour Cost",
                                        "Fixed Amount":"LumpSum / Fixed Amount"})
+
+    # Handle pending remove-detail action (idx, d_i)
+    _rem_det = st.session_state.pop("tp_rem_det", None)
+    if _rem_det is not None:
+        _ridx, _rdi = _rem_det
+        if _ridx in df.index:
+            _items = parse_lumpsum_details(df.loc[_ridx, "LumpSum Details"])
+            if len(_items) > 1:
+                _items.pop(_rdi)
+                df.loc[_ridx, "LumpSum Details"] = json.dumps(_items)
+                df.loc[_ridx, "Fixed Amount"] = sum(it["amount"] for it in _items)
+            st.session_state[THIRD_PARTY_KEY] = df; st.rerun()
+
     remove_idx = st.session_state.pop("tp_remove_idx", None)
     if remove_idx is not None and remove_idx in df.index:
         df = df.drop(index=remove_idx).reset_index(drop=True)
@@ -2041,8 +2136,9 @@ def render_third_party():
             if df.loc[idx, "Basis"] == "Percentage of Labour Cost":
                 df.loc[idx, "Percentage"] = st.number_input("Percentage (%)",
                     min_value=0.0, max_value=100.0, value=float(row.get("Percentage", 0.0)),
-                    step=0.1, format="%.1f", key=f"tp_pct_{idx}")
+                    step=0.0001, format="%.4f", key=f"tp_pct_{idx}")
                 df.loc[idx, "Fixed Amount"] = 0.0
+                df.loc[idx, "LumpSum Details"] = ""
             # For LumpSum, col3 is left blank intentionally
         with col4:
             st.markdown("<br>", unsafe_allow_html=True)
@@ -2051,28 +2147,70 @@ def render_third_party():
 
         if df.loc[idx, "Basis"] == "LumpSum / Fixed Amount":
             df.loc[idx, "Percentage"] = 0.0
-            lcol1, lcol2, lcol3, lcol4 = st.columns([3, 2, 2, 1], gap="small")
-            # lcol1 intentionally empty (aligns under Description)
-            with lcol2:
-                df.loc[idx, "LumpSum Details"] = st.text_input("Details", value=row.get("LumpSum Details", ""), key=f"tp_ls_det_{idx}", placeholder="Enter details...")
-            with lcol3:
-                df.loc[idx, "Fixed Amount"] = st.number_input("Amount",
-                    min_value=0.0, value=float(row.get("Fixed Amount", 0.0)),
-                    step=100.0, format="%.2f", key=f"tp_amt_{idx}")
+            detail_items = parse_lumpsum_details(row.get("LumpSum Details", ""))
+
+            # Render each detail row
+            for d_i, det in enumerate(detail_items):
+                _, d_col1, d_col2, d_col3 = st.columns([3, 2, 2, 1], gap="small")
+                with d_col1:
+                    det["detail"] = st.text_input("Detail", value=det.get("detail", ""),
+                        key=f"tp_ls_det_{idx}_{d_i}", placeholder="Enter detail…")
+                with d_col2:
+                    det["amount"] = st.number_input("Amount",
+                        min_value=0.0, value=float(det.get("amount", 0.0)),
+                        step=100.0, format="%.2f", key=f"tp_ls_amt_{idx}_{d_i}")
+                with d_col3:
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    if len(detail_items) > 1 and st.button("✕", key=f"tp_ls_rem_{idx}_{d_i}"):
+                        st.session_state["tp_rem_det"] = (idx, d_i)
+                        df.loc[idx, "LumpSum Details"] = json.dumps(detail_items)
+                        df.loc[idx, "Fixed Amount"] = sum(it["amount"] for it in detail_items)
+                        st.session_state[THIRD_PARTY_KEY] = df; st.rerun()
+
+            # Total Amount row
+            total_det = sum(it["amount"] for it in detail_items)
+            _, ta_col1, ta_col2, _ = st.columns([3, 2, 2, 1], gap="small")
+            with ta_col1:
+                st.markdown(
+                    "<div style='text-align:right;font-weight:700;color:var(--text);"
+                    "border-top:2px solid var(--border);padding:6px 4px 2px'>Total Amount</div>",
+                    unsafe_allow_html=True)
+            with ta_col2:
+                st.markdown(
+                    f"<div style='font-weight:700;color:var(--text);"
+                    f"border-top:2px solid var(--border);padding:6px 0 2px'>{total_det:,.2f}</div>",
+                    unsafe_allow_html=True)
+
+            # Add Detail button
+            _, ad_col, _, _ = st.columns([3, 2, 2, 1], gap="small")
+            with ad_col:
+                if st.button("+ Add Detail", key=f"tp_add_det_{idx}", use_container_width=True):
+                    detail_items.append({"detail": "", "amount": 0.0})
+                    df.loc[idx, "LumpSum Details"] = json.dumps(detail_items)
+                    df.loc[idx, "Fixed Amount"] = total_det
+                    st.session_state[THIRD_PARTY_KEY] = df; st.rerun()
+
+            # Sync back to df
+            df.loc[idx, "LumpSum Details"] = json.dumps(detail_items)
+            df.loc[idx, "Fixed Amount"] = total_det
         
         st.markdown("<div class='pdivider'></div>", unsafe_allow_html=True)
 
     st.session_state[THIRD_PARTY_KEY] = df
 
     col1, col2 = st.columns(2, gap="small")
+    col1, col2, col3 = st.columns(3, gap="small")
     with col1:
+        if st.button("← Back", use_container_width=True):
+            st.session_state["page"] = "TABLE"; st.rerun()
+    with col2:
         if st.button("Add Item", use_container_width=True):
             new = pd.DataFrame([{"Category":"Third Party Services","Description":"",
                                  "Basis":"Percentage of Labour Cost","Percentage":0.0,
-                                 "Fixed Amount":0.0,"Remarks":""}])
+                                 "Fixed Amount":0.0,"Remarks":"","LumpSum Details":""}])
             st.session_state[THIRD_PARTY_KEY] = pd.concat([df, new], ignore_index=True); st.rerun()
-    with col2:
-        if st.button("Non-Labour →", use_container_width=True, type="primary"):
+    with col3:
+        if st.button("Next →", use_container_width=True, type="primary"):
             st.session_state["page"] = "NON_LABOUR"; st.rerun()
 
     if len(df) > 0:
@@ -2109,11 +2247,27 @@ def render_non_labour():
     if df.empty:
         df = pd.DataFrame([{"Category":"Non-Labour Cost","Description":"",
                             "Basis":"Percentage of Labour Cost","Percentage":0.0,
-                            "Fixed Amount":0.0,"Remarks":""}])
+                            "Fixed Amount":0.0,"Remarks":"","LumpSum Details":""}])
         st.session_state[NON_LABOUR_KEY] = df
+    # Ensure LumpSum Details column exists
+    if "LumpSum Details" not in df.columns:
+        df["LumpSum Details"] = ""
 
     df["Basis"] = df["Basis"].replace({"% of Labour Cost":"Percentage of Labour Cost",
                                        "Fixed Amount":"LumpSum / Fixed Amount"})
+
+    # Handle pending remove-detail action (idx, d_i)
+    _rem_det = st.session_state.pop("nl_rem_det", None)
+    if _rem_det is not None:
+        _ridx, _rdi = _rem_det
+        if _ridx in df.index:
+            _items = parse_lumpsum_details(df.loc[_ridx, "LumpSum Details"])
+            if len(_items) > 1:
+                _items.pop(_rdi)
+                df.loc[_ridx, "LumpSum Details"] = json.dumps(_items)
+                df.loc[_ridx, "Fixed Amount"] = sum(it["amount"] for it in _items)
+            st.session_state[NON_LABOUR_KEY] = df; st.rerun()
+
     remove_idx = st.session_state.pop("nl_remove_idx", None)
     if remove_idx is not None and remove_idx in df.index:
         df = df.drop(index=remove_idx).reset_index(drop=True)
@@ -2124,7 +2278,7 @@ def render_non_labour():
         current_basis = row["Basis"] if row["Basis"] in basis_options else basis_options[0]
         col1, col2, col3, col4 = st.columns([3, 2, 2, 1], gap="small")
         with col1:
-            df.loc[idx, "Description"] = st.text_input("Description", value=row["Description"],
+            df.loc[idx, "Description"] = st.text_input("Description", value=row.get("Description", ""),
                 key=f"nl_desc_{idx}", placeholder="Enter description…")
         with col2:
             df.loc[idx, "Basis"] = st.selectbox("Basis", basis_options,
@@ -2133,30 +2287,80 @@ def render_non_labour():
             if df.loc[idx, "Basis"] == "Percentage of Labour Cost":
                 df.loc[idx, "Percentage"] = st.number_input("Percentage (%)",
                     min_value=0.0, max_value=100.0, value=float(row.get("Percentage", 0.0)),
-                    step=0.1, format="%.1f", key=f"nl_pct_{idx}")
+                    step=0.0001, format="%.4f", key=f"nl_pct_{idx}")
                 df.loc[idx, "Fixed Amount"] = 0.0
-            else:
-                df.loc[idx, "Fixed Amount"] = st.number_input("Fixed Amount",
-                    min_value=0.0, value=float(row.get("Fixed Amount", 0.0)),
-                    step=100.0, format="%.2f", key=f"nl_amt_{idx}")
-                df.loc[idx, "Percentage"] = 0.0
+                df.loc[idx, "LumpSum Details"] = ""
+            # For LumpSum, col3 is left blank intentionally
         with col4:
             st.markdown("<br>", unsafe_allow_html=True)
             if st.button("🗑️", key=f"nl_del_{idx}"):
                 st.session_state["nl_remove_idx"] = idx; st.rerun()
+
+        if df.loc[idx, "Basis"] == "LumpSum / Fixed Amount":
+            df.loc[idx, "Percentage"] = 0.0
+            detail_items = parse_lumpsum_details(row.get("LumpSum Details", ""))
+
+            # Render each detail row
+            for d_i, det in enumerate(detail_items):
+                _, d_col1, d_col2, d_col3 = st.columns([3, 2, 2, 1], gap="small")
+                with d_col1:
+                    det["detail"] = st.text_input("Detail", value=det.get("detail", ""),
+                        key=f"nl_ls_det_{idx}_{d_i}", placeholder="Enter detail…")
+                with d_col2:
+                    det["amount"] = st.number_input("Amount",
+                        min_value=0.0, value=float(det.get("amount", 0.0)),
+                        step=100.0, format="%.2f", key=f"nl_ls_amt_{idx}_{d_i}")
+                with d_col3:
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    if len(detail_items) > 1 and st.button("✕", key=f"nl_ls_rem_{idx}_{d_i}"):
+                        st.session_state["nl_rem_det"] = (idx, d_i)
+                        df.loc[idx, "LumpSum Details"] = json.dumps(detail_items)
+                        df.loc[idx, "Fixed Amount"] = sum(it["amount"] for it in detail_items)
+                        st.session_state[NON_LABOUR_KEY] = df; st.rerun()
+
+            # Total Amount row
+            total_det = sum(it["amount"] for it in detail_items)
+            _, ta_col1, ta_col2, _ = st.columns([3, 2, 2, 1], gap="small")
+            with ta_col1:
+                st.markdown(
+                    "<div style='text-align:right;font-weight:700;color:var(--text);"
+                    "border-top:2px solid var(--border);padding:6px 4px 2px'>Total Amount</div>",
+                    unsafe_allow_html=True)
+            with ta_col2:
+                st.markdown(
+                    f"<div style='font-weight:700;color:var(--text);"
+                    f"border-top:2px solid var(--border);padding:6px 0 2px'>{total_det:,.2f}</div>",
+                    unsafe_allow_html=True)
+
+            # Add Detail button
+            _, ad_col, _, _ = st.columns([3, 2, 2, 1], gap="small")
+            with ad_col:
+                if st.button("+ Add Detail", key=f"nl_add_det_{idx}", use_container_width=True):
+                    detail_items.append({"detail": "", "amount": 0.0})
+                    df.loc[idx, "LumpSum Details"] = json.dumps(detail_items)
+                    df.loc[idx, "Fixed Amount"] = total_det
+                    st.session_state[NON_LABOUR_KEY] = df; st.rerun()
+
+            # Sync back to df
+            df.loc[idx, "LumpSum Details"] = json.dumps(detail_items)
+            df.loc[idx, "Fixed Amount"] = total_det
+
         st.markdown("<div class='pdivider'></div>", unsafe_allow_html=True)
 
     st.session_state[NON_LABOUR_KEY] = df
 
-    col1, col2 = st.columns(2, gap="small")
+    col1, col2, col3 = st.columns(3, gap="small")
     with col1:
+        if st.button("← Back", use_container_width=True):
+            st.session_state["page"] = "THIRD_PARTY"; st.rerun()
+    with col2:
         if st.button("Add Item", use_container_width=True):
             new = pd.DataFrame([{"Category":"Non-Labour Cost","Description":"",
                                  "Basis":"Percentage of Labour Cost","Percentage":0.0,
-                                 "Fixed Amount":0.0,"Remarks":""}])
+                                 "Fixed Amount":0.0,"Remarks":"","LumpSum Details":""}])
             st.session_state[NON_LABOUR_KEY] = pd.concat([df, new], ignore_index=True); st.rerun()
-    with col2:
-        if st.button("Monthly Loading →", use_container_width=True, type="primary"):
+    with col3:
+        if st.button("Next →", use_container_width=True, type="primary"):
             st.session_state["page"] = "LOADING"; st.rerun()
 
     if len(df) > 0:
@@ -2194,15 +2398,15 @@ def render_loading():
 
     df = st.session_state[MONTHLY_LOADING_KEY].copy()
     if df.empty:
-        months = [f"Month {i+1:02d}" for i in range(12)]
-        df = pd.DataFrame({"Month": months, "Loading Factor (%)": [100.0]*12,
-                           "Weightage Distribution": [100.0/12]*12})
+        months = [f"Month {i+1:02d}" for i in range(N_MONTHS)]
+        df = pd.DataFrame({"Month": months, "Loading Factor (%)": [100.0]*N_MONTHS,
+                           "Weightage Distribution": [100.0/N_MONTHS]*N_MONTHS})
         st.session_state[MONTHLY_LOADING_KEY] = df
 
-    col1, col2, col3 = st.columns([2,1,3], gap="small")
-    with col1:
+    _nc1, _nc2, _nc3 = st.columns([3, 1, 3], gap="small", vertical_alignment="bottom")
+    with _nc1:
         num = st.number_input("Number of Months", min_value=1, max_value=60, value=len(df), step=1)
-    with col2:
+    with _nc2:
         if st.button("Update", use_container_width=True) and num != len(df):
             months = [f"Month {i+1:02d}" for i in range(num)]
             if num > len(df):
@@ -2214,7 +2418,7 @@ def render_loading():
                 df = df.iloc[:num].reset_index(drop=True)
             df["Weightage Distribution"] = 100.0 / num
             st.session_state[MONTHLY_LOADING_KEY] = df; st.rerun()
-    with col3:
+    with _nc3:
         st.info(f"⚡ Total weightage: {df['Weightage Distribution'].sum():.1f}%")
 
     st.markdown("<div class='pdivider'></div>", unsafe_allow_html=True)
@@ -2269,18 +2473,18 @@ def render_loading():
 
     b1, b2, b3 = st.columns(3, gap="small")
     with b1:
-        if st.button("Back", use_container_width=True):
+        if st.button("← Back", use_container_width=True):
             st.session_state["page"] = "NON_LABOUR"; st.rerun()
     with b2:
-        if st.button("Totals →", use_container_width=True, type="primary"):
-            st.session_state["page"] = "TOTALS"; st.rerun()
-    with b3:
         if st.button("Reset", use_container_width=True):
             months = [f"Month {i+1:02d}" for i in range(12)]
             st.session_state[MONTHLY_LOADING_KEY] = pd.DataFrame({
                 "Month": months, "Loading Factor (%)": [100.0]*12,
                 "Weightage Distribution": [100.0/12]*12
             }); st.rerun()
+    with b3:
+        if st.button("Next →", use_container_width=True, type="primary"):
+            st.session_state["page"] = "TOTALS"; st.rerun()
 
 # ─────────────────────────────────────────────────
 # Page: COMPARE (no emojis)
