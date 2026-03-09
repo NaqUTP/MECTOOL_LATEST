@@ -6,10 +6,13 @@
 import io
 import re
 import json
+import base64
 import warnings
+from pathlib import Path
 from typing import Dict, List, Optional
 from datetime import datetime
 import pandas as pd
+from PIL import Image
 import streamlit as st
 
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -28,9 +31,11 @@ except Exception:
 
 # ─────────────────────────────────────────────────
 # Page config – must be FIRST Streamlit command
+_logo_path = Path(__file__).parent / "mec-tool-logo.png"
+_page_icon = Image.open(_logo_path) if _logo_path.exists() else "⛽"
 st.set_page_config(
     page_title="MEC TOOL | PETRONAS",
-    page_icon="⛽",
+    page_icon=_page_icon,
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -262,6 +267,18 @@ def inject_css(dark: bool):
     section[data-testid="stSidebar"] .stFileUploader label {{
         color: var(--text) !important;
     }}
+    /* Sidebar file uploader dropzone text */
+    section[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] * {{
+        color: var(--text) !important;
+    }}
+    section[data-testid="stSidebar"] .stFileUploader [data-testid="stFileUploaderDropzoneInstructions"] span {{
+        color: var(--text) !important;
+    }}
+    section[data-testid="stSidebar"] .stFileUploader small,
+    section[data-testid="stSidebar"] .stFileUploader span,
+    section[data-testid="stSidebar"] .stFileUploader p {{
+        color: var(--text) !important;
+    }}
 
     /* ── Main content ── */
     .main .block-container {{
@@ -276,8 +293,24 @@ def inject_css(dark: bool):
         color: var(--text) !important;
         letter-spacing: -0.02em;
     }}
-    p, label, span, div {{
+    /* Apply text color to common elements, but NOT inside petronas-banner (those stay white) */
+    p:not(.petronas-banner *), label, span:not(.petronas-banner *) {{
         color: var(--text) !important;
+    }}
+    /* Specifically target standard markdown text blocks rather than global div */
+    .stMarkdownContainer {{
+        color: var(--text) !important;
+    }}
+    /* Keep petronas-banner text white unconditionally */
+    .petronas-banner h1,
+    .petronas-banner h2,
+    .petronas-banner h3,
+    .petronas-banner p,
+    .petronas-banner span {{
+        color: #ffffff !important;
+    }}
+    .petronas-banner .subtitle {{
+        color: rgba(255,255,255,0.65) !important;
     }}
     .stCaption, .caption, small {{
         color: var(--text-muted) !important;
@@ -448,15 +481,13 @@ def inject_css(dark: bool):
     }}
 
     /* ── Nav tabs ── */
-    .nav-container {{
-        display: flex;
-        gap: 0.3rem;
-        background: var(--bg-alt);
-        border-radius: var(--radius);
-        padding: 0.35rem;
-        margin-bottom: 1.75rem;
-        border: 1px solid var(--border);
-        flex-wrap: wrap;
+    /* Target the nav layout specifically */
+    div.element-container:has(.nav-marker) + div[data-testid="stHorizontalBlock"] {{
+        flex-wrap: wrap !important;
+    }}
+    div.element-container:has(.nav-marker) + div[data-testid="stHorizontalBlock"] > div[data-testid="column"] {{
+        min-width: 90px !important;
+        flex: 1 1 auto !important;
     }}
 
     /* ── Streamlit buttons override ── */
@@ -466,6 +497,11 @@ def inject_css(dark: bool):
         border-radius: 8px !important;
         transition: all 0.18s !important;
         letter-spacing: 0.01em;
+        white-space: nowrap !important;
+        padding-left: 0.25rem !important;
+        padding-right: 0.25rem !important;
+        font-size: 0.8rem !important;
+        min-height: 2.2rem !important;
     }}
     div.stButton > button[kind="primary"] {{
         background: linear-gradient(135deg, {teal} 0%, {teal_d} 100%) !important;
@@ -492,12 +528,25 @@ def inject_css(dark: bool):
     .stTextInput > div > div > input,
     .stNumberInput > div > div > input,
     .stSelectbox > div > div,
+    .stSelectbox div[data-baseweb="select"] span,
     .stDateInput > div > div > input {{
         background: var(--input-bg) !important;
         border-color: var(--border) !important;
         border-radius: 8px !important;
         color: var(--text) !important;
         font-family: 'DM Sans', sans-serif !important;
+    }}
+    
+    /* Fix for dropdown menus in dark mode */
+    ul[role="listbox"], ul[role="listbox"] li {{
+        background: var(--bg-card) !important;
+        color: var(--text) !important;
+    }}
+    div[data-baseweb="popover"] {{
+        background: var(--bg-card) !important;
+    }}
+    .stSelectbox div[data-baseweb="select"] [data-testid="stMarkdownContainer"] p {{
+        color: var(--text) !important;
     }}
     .stTextInput > div > div > input:focus,
     .stNumberInput > div > div > input:focus {{
@@ -573,6 +622,14 @@ def inject_css(dark: bool):
         text-transform: uppercase;
         letter-spacing: 0.05em;
     }}
+    /* Handle text colors for HTML-based dataframes */
+    .stDataFrame table, .stDataFrame td, .stDataFrame th {{
+        color: var(--text) !important;
+        background: var(--bg-card);
+    }}
+    .stDataFrame div[data-testid="stDataFrame"] * {{
+        color: var(--text) !important;
+    }}
 
     /* ── Comparison badges ── */
     .comparison-badge {{
@@ -611,14 +668,18 @@ def inject_css(dark: bool):
         border-bottom: 1px solid var(--border);
     }}
     .sidebar-logo .logo-icon {{
-        width: 36px; height: 36px;
-        background: linear-gradient(135deg, {teal} 0%, {teal_d} 100%);
+        width: 44px; height: 44px;
         border-radius: 8px;
         display: flex;
         align-items: center;
         justify-content: center;
-        font-size: 1.1rem;
         flex-shrink: 0;
+        overflow: hidden;
+    }}
+    .sidebar-logo .logo-icon img {{
+        width: 44px; height: 44px;
+        object-fit: contain;
+        border-radius: 8px;
     }}
     .sidebar-logo .logo-text {{
         font-weight: 700;
@@ -696,9 +757,30 @@ def inject_css(dark: bool):
     }}
 
     /* ── Hide streamlit branding ── */
-    #MainMenu {{ visibility: hidden; }}
-    footer {{ visibility: hidden; }}
-    header {{ visibility: hidden; }}
+    #MainMenu {{ display: none !important; }}
+    footer {{ display: none !important; }}
+    .stAppDeployButton {{ display: none !important; }}
+    
+    /* Make header transparent but keep toggles visible */
+    header[data-testid="stHeader"] {{
+        background: transparent !important;
+        border-bottom: none !important;
+    }}
+
+    /* Sidebar toggle styling */
+    [data-testid="collapsedControl"] {{
+        z-index: 99999 !important;
+        background: var(--teal) !important;
+        border-radius: 6px !important;
+        margin: 0.5rem;
+    }}
+    [data-testid="collapsedControl"] svg {{
+        fill: #ffffff !important;
+    }}
+    
+    .main .block-container {{
+        padding-top: 1.5rem !important;
+    }}
 
     /* ── File uploader ── */
     .stFileUploader > div {{
@@ -709,6 +791,16 @@ def inject_css(dark: bool):
     }}
     .stFileUploader > div:hover {{
         border-color: var(--teal) !important;
+    }}
+    /* Fix drag-and-drop text always visible in both modes */
+    .stFileUploader small, .stFileUploader span, .stFileUploader p,
+    [data-testid="stFileUploaderDropzone"] small,
+    [data-testid="stFileUploaderDropzone"] span,
+    [data-testid="stFileUploaderDropzone"] p {{
+        color: var(--text-muted) !important;
+    }}
+    [data-testid="stFileUploaderDropzoneInstructions"] > div > span {{
+        color: var(--text) !important;
     }}
 
     /* ── Scrollbar ── */
@@ -742,13 +834,19 @@ def inject_css(dark: bool):
 
 inject_css(st.session_state["dark_mode"])
 
+# Load logo once — used in sidebar and app header
+_logo_b64  = base64.b64encode(_logo_path.read_bytes()).decode() if _logo_path.exists() else ""
+_logo_html = (f'<img src="data:image/png;base64,{_logo_b64}" '
+              f'style="width:44px;height:44px;object-fit:contain;border-radius:8px">'
+             ) if _logo_b64 else "⛽"
+
 # ─────────────────────────────────────────────────
 # Sidebar
 with st.sidebar:
     # Logo
-    st.markdown("""
+    st.markdown(f"""
     <div class="sidebar-logo">
-        <div class="logo-icon">⛽</div>
+        <div class="logo-icon">{_logo_html}</div>
         <div>
             <div class="logo-text">MEC TOOL</div>
             <div class="logo-sub">PETRONAS UPSTREAM CE</div>
@@ -772,8 +870,7 @@ with st.sidebar:
             st.cache_data.clear()
             st.rerun()
     else:
-        st.warning("MEC.csv required")
-        st.stop()
+        st.warning("⬆️ Upload MEC.csv to begin")
 
     st.markdown("<hr style='border:none;border-top:1px solid var(--border);margin:0.75rem 0'>", unsafe_allow_html=True)
 
@@ -1461,6 +1558,7 @@ def render_step_bar():
 # ─────────────────────────────────────────────────
 # Navigation bar (no emojis)
 def render_navigation():
+    st.markdown('<div class="nav-marker"></div>', unsafe_allow_html=True)
     page_order = list(PAGES.items())
     n = len(page_order)
     cols = st.columns(n, gap="small")
@@ -1642,8 +1740,9 @@ def render_table():
     gb.configure_grid_options(getRowStyle=row_style)
 
     try:
+        ag_theme = "alpine-dark" if st.session_state.get("dark_mode", False) else "alpine"
         resp = AgGrid(df, gridOptions=gb.build(), height=480, update_on="value_changed",
-                      allow_unsafe_jscode=True, theme="streamlit")
+                      allow_unsafe_jscode=True, theme=ag_theme)
         st.session_state[GRID_KEY] = pd.DataFrame(resp["data"])
     except Exception as e:
         st.warning(f"Grid error: {e}")
@@ -1930,32 +2029,38 @@ def render_third_party():
 
     basis_options = ["Percentage of Labour Cost", "LumpSum / Fixed Amount"]
     for idx, row in df.iterrows():
-        with st.container():
-            st.markdown(f"<div class='pcard pcard-accent'>", unsafe_allow_html=True)
-            current_basis = row["Basis"] if row["Basis"] in basis_options else basis_options[0]
-            col1, col2, col3, col4 = st.columns([3, 2, 2, 1], gap="small")
-            with col1:
-                df.loc[idx, "Description"] = st.text_input(f"Description", value=row["Description"],
-                    key=f"tp_desc_{idx}", placeholder="Enter description…")
-            with col2:
-                df.loc[idx, "Basis"] = st.selectbox("Basis", basis_options,
-                    index=basis_options.index(current_basis), key=f"tp_basis_{idx}")
-            with col3:
-                if df.loc[idx, "Basis"] == "Percentage of Labour Cost":
-                    df.loc[idx, "Percentage"] = st.number_input("Percentage (%)",
-                        min_value=0.0, max_value=100.0, value=float(row.get("Percentage", 0.0)),
-                        step=0.1, format="%.1f", key=f"tp_pct_{idx}")
-                    df.loc[idx, "Fixed Amount"] = 0.0
-                else:
-                    df.loc[idx, "Fixed Amount"] = st.number_input("Fixed Amount",
-                        min_value=0.0, value=float(row.get("Fixed Amount", 0.0)),
-                        step=100.0, format="%.2f", key=f"tp_amt_{idx}")
-                    df.loc[idx, "Percentage"] = 0.0
-            with col4:
-                st.markdown("<br>", unsafe_allow_html=True)
-                if st.button("🗑️", key=f"tp_del_{idx}"):
-                    st.session_state["tp_remove_idx"] = idx; st.rerun()
-            st.markdown("</div>", unsafe_allow_html=True)
+        current_basis = row["Basis"] if row["Basis"] in basis_options else basis_options[0]
+        col1, col2, col3, col4 = st.columns([3, 2, 2, 1], gap="small")
+        with col1:
+            df.loc[idx, "Description"] = st.text_input(f"Description", value=row.get("Description", ""),
+                key=f"tp_desc_{idx}", placeholder="Enter description…")
+        with col2:
+            df.loc[idx, "Basis"] = st.selectbox("Basis", basis_options,
+                index=basis_options.index(current_basis), key=f"tp_basis_{idx}")
+        with col3:
+            if df.loc[idx, "Basis"] == "Percentage of Labour Cost":
+                df.loc[idx, "Percentage"] = st.number_input("Percentage (%)",
+                    min_value=0.0, max_value=100.0, value=float(row.get("Percentage", 0.0)),
+                    step=0.1, format="%.1f", key=f"tp_pct_{idx}")
+                df.loc[idx, "Fixed Amount"] = 0.0
+            # For LumpSum, col3 is left blank intentionally
+        with col4:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("🗑️", key=f"tp_del_{idx}"):
+                st.session_state["tp_remove_idx"] = idx; st.rerun()
+
+        if df.loc[idx, "Basis"] == "LumpSum / Fixed Amount":
+            df.loc[idx, "Percentage"] = 0.0
+            lcol1, lcol2, lcol3, lcol4 = st.columns([3, 2, 2, 1], gap="small")
+            # lcol1 intentionally empty (aligns under Description)
+            with lcol2:
+                df.loc[idx, "LumpSum Details"] = st.text_input("Details", value=row.get("LumpSum Details", ""), key=f"tp_ls_det_{idx}", placeholder="Enter details...")
+            with lcol3:
+                df.loc[idx, "Fixed Amount"] = st.number_input("Amount",
+                    min_value=0.0, value=float(row.get("Fixed Amount", 0.0)),
+                    step=100.0, format="%.2f", key=f"tp_amt_{idx}")
+        
+        st.markdown("<div class='pdivider'></div>", unsafe_allow_html=True)
 
     st.session_state[THIRD_PARTY_KEY] = df
 
@@ -2279,10 +2384,10 @@ def render_compare():
 # App header (no emojis)
 st.markdown(f"""
 <div style="display:flex;align-items:center;gap:1rem;margin-bottom:0.5rem">
-    <div style="font-size:1.5rem">⛽</div>
+    <div>{_logo_html}</div>
     <div>
         <span style="font-weight:700;font-size:1.1rem;color:var(--teal);letter-spacing:-0.02em">MEC TOOL</span>
-        <span style="color:var(--text-muted);font-size:0.85rem;margin-left:0.75rem">Major Engineering Contract · PETRONAS Upstream CE</span>
+        <span style="color:{'rgba(255,255,255,0.6)' if st.session_state.get('dark_mode', False) else 'rgba(10,22,40,0.55)'};font-size:0.85rem;margin-left:0.75rem">Major Engineering Contract · PETRONAS Upstream CE</span>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -2290,16 +2395,28 @@ st.markdown(f"""
 render_navigation()
 
 # ─────────────────────────────────────────────────
-# Router
-page = st.session_state["page"]
-if   page == "MAIN":        render_main()
-elif page == "TABLE":       render_table()
-elif page == "THIRD_PARTY": render_third_party()
-elif page == "NON_LABOUR":  render_non_labour()
-elif page == "LOADING":     render_loading()
-elif page == "TOTALS":      render_totals()
-elif page == "SUMMARY":     render_summary()
-elif page == "COMPARE":     render_compare()
+# Guard: show upload prompt if MEC.csv not yet loaded
+if not st.session_state["mec_data_loaded"]:
+    st.markdown("""
+    <div class="petronas-banner fadeup">
+        <h1>Welcome to MEC Tool</h1>
+        <p class="subtitle">Major Engineering Contract Cost Estimation — PETRONAS Upstream CE</p>
+    </div>
+    """, unsafe_allow_html=True)
+    st.info("← Please upload **MEC.csv** in the sidebar to get started. Use the **›** arrow at the top-left to open the sidebar if it is collapsed.")
 else:
-    st.session_state["page"] = "MAIN"
-    st.rerun()
+    # Router
+    page = st.session_state["page"]
+    if   page == "MAIN":        render_main()
+    elif page == "TABLE":       render_table()
+    elif page == "THIRD_PARTY": render_third_party()
+    elif page == "NON_LABOUR":  render_non_labour()
+    elif page == "LOADING":     render_loading()
+    elif page == "TOTALS":      render_totals()
+    elif page == "SUMMARY":     render_summary()
+    elif page == "COMPARE":     render_compare()
+    else:
+        st.session_state["page"] = "MAIN"
+        st.rerun()
+
+
