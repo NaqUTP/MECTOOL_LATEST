@@ -72,7 +72,8 @@ B_D_CATEGORY_FALLBACK = [
     "Middle East/Africa", "Europe", "Asia", "Japan", "Others"
 ]
 AC_CATEGORIES = ["Malaysian", "Regional", "Expatriate"]
-UNIT_TYPES = ["Minimum", "Maximum", "Normalise", "AKER", "DAR", "MMC", "TUAH", "PRW", "PUSB"]
+# UNIT_TYPES = ["Minimum", "Maximum", "Normalise", "AKER", "DAR", "MMC", "TUAH", "PRW", "PUSB"]
+UNIT_TYPES = []
 THIRD_PARTY_CATEGORIES = ["Third Party Services"]
 NON_LABOUR_CATEGORIES = ["Non-Labour Cost"]
 
@@ -1321,8 +1322,8 @@ def _canonical_col(df, name):
 def _relaxed_match(df, personnel, category, schedule, rate_type, package):
     if df.empty: return df
     m = df.copy()
-    if "PACKAGE" in m.columns and package:
-        pkg_s = _canonical_col(m, "PACKAGE")
+    if "PROJECT" in m.columns and package:
+        pkg_s = _canonical_col(m, "PROJECT")
         if not pkg_s.empty:
             m = m[pkg_s.str.contains(package.lower().strip(), na=False)]
     if "PERSONNEL" in m.columns and personnel:
